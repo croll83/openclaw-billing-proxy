@@ -146,7 +146,7 @@ pm2 save
 Claude Code's OAuth token expires every ~24 hours. The proxy reads the token fresh from disk on each request. To refresh:
 
 - **Easiest**: Open Claude Code CLI briefly -- it auto-refreshes on startup
-- **Automated**: Set up a cron that runs `claude --version` daily (triggers auth refresh)
+- **Automated**: Set up a cron that runs `claude -p "ping" --max-turns 1 --no-session-persistence` daily (triggers auth refresh)
 
 ## Health Check
 
