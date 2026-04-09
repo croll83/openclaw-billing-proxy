@@ -51,8 +51,8 @@ const CC_TOOL_STUBS = [
 ];
 
 // --- Layer 2: Keyword Replacements -------------------------------------------
-// Applied globally via split/join on the entire request body.
-// These replace Hermes-specific terms to avoid any fingerprinting.
+// Applied ONLY to text content fields (system[].text, messages[].content,
+// tool descriptions) — never to JSON structure (role, type, keys).
 const DEFAULT_REPLACEMENTS = [
   ['~/.hermes/', '~/.config/app/'],
   ['hermes_tools', 'code_tools'],
@@ -68,6 +68,9 @@ const DEFAULT_REPLACEMENTS = [
 ];
 
 // --- Reverse Mappings --------------------------------------------------------
+// Applied globally on response text. Only SPECIFIC strings that can't collide
+// with JSON structure. "Assistant"/"assistant" are intentionally EXCLUDED —
+// they'd break "role":"assistant" in API responses.
 const DEFAULT_REVERSE_MAP = [
   ['~/.config/app/', '~/.hermes/'],
   ['code_tools', 'hermes_tools'],
@@ -76,8 +79,6 @@ const DEFAULT_REVERSE_MAP = [
   ['Plan mode', 'Plan mode for Hermes'],
   ['cli_module', 'hermes_cli'],
   ['from app', 'from hermes'],
-  ['Assistant', 'Hermes'],
-  ['assistant', 'hermes'],
   ['routing layer', 'billing proxy'],
   ['routing-layer', 'billing-proxy']
 ];
@@ -143,95 +144,94 @@ function getToken(credsPath) {
   return oauth;
 }
 
-// --- Helper ------------------------------------------------------------------
-function findMatchingBracket(str, start) {
-  let d = 0;
-  for (let i = start; i < str.length; i++) {
-    if (str[i] === '[') d++;
-    else if (str[i] === ']') { d--; if (d === 0) return i; }
+// --- Request Processing ------------------------------------------------------
+function applyReplacements(text, replacements) {
+  let r = text;
+  for (const [find, rep] of replacements) {
+    r = r.split(find).join(rep);
   }
-  return -1;
+  return r;
 }
 
-// --- Request Processing ------------------------------------------------------
 function processBody(bodyStr, config) {
-  let m = bodyStr;
-
-  // Layer 2: Keyword replacement (global split/join)
-  for (const [find, replace] of config.replacements) {
-    m = m.split(find).join(replace);
+  let parsed;
+  try {
+    parsed = JSON.parse(bodyStr);
+  } catch (e) {
+    console.log(`[PROCESS] JSON parse error, passing through: ${e.message}`);
+    return bodyStr;
   }
 
-  // Layer 4: System prompt sanitization
-  // Strip structured config blocks if present (large ## sections)
-  if (config.stripSystemConfig) {
-    const IDENTITY_MARKER = 'You are a personal assistant';
-    const configStart = m.indexOf(IDENTITY_MARKER);
-    if (configStart !== -1) {
-      let stripFrom = configStart;
-      if (stripFrom >= 2 && m[stripFrom - 2] === '\\' && m[stripFrom - 1] === 'n') {
-        stripFrom -= 2;
-      }
-      const configEnd = m.indexOf('AGENTS.md', configStart);
-      if (configEnd !== -1) {
-        let boundary = configEnd;
-        for (let i = configEnd - 1; i > stripFrom; i--) {
-          if (m[i] === '#' && m[i - 1] === '#' && i >= 3 && m[i - 3] === '\\' && m[i - 2] === 'n') {
-            boundary = i - 3;
-            break;
-          }
-        }
+  const rep = (text) => applyReplacements(text, config.replacements);
 
-        const strippedLen = boundary - stripFrom;
-        if (strippedLen > 1000) {
-          const PARAPHRASE =
-            '\\nYou are an AI operations assistant with access to all tools listed in this request ' +
-            'for file operations, command execution, web search, browser control, scheduling, ' +
-            'messaging, and session management. Tool names are case-sensitive and must be called ' +
-            'exactly as listed. Your responses route to the active channel automatically. ' +
-            'For cross-session communication, use the task messaging tools. ' +
-            'Skills defined in your workspace should be invoked when they match user requests. ' +
-            'Consult your workspace reference files for detailed operational configuration.\\n';
+  // Layer 2: Keyword replacement — only text content fields
+  if (Array.isArray(parsed.system)) {
+    for (const block of parsed.system) {
+      if (block.text) block.text = rep(block.text);
+    }
+  } else if (typeof parsed.system === 'string') {
+    parsed.system = rep(parsed.system);
+  }
 
-          m = m.slice(0, stripFrom) + PARAPHRASE + m.slice(boundary);
-          console.log(`[STRIP] Removed ${strippedLen} chars of config template`);
+  if (Array.isArray(parsed.messages)) {
+    for (const msg of parsed.messages) {
+      if (typeof msg.content === 'string') {
+        msg.content = rep(msg.content);
+      } else if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (block.text) block.text = rep(block.text);
         }
       }
     }
   }
 
-  // Inject CC tool stubs into tools array
+  if (Array.isArray(parsed.tools)) {
+    for (const tool of parsed.tools) {
+      if (tool.description) tool.description = rep(tool.description);
+    }
+  }
+
+  // Layer 4: System prompt relocation — move SOUL.md from system to messages
+  if (config.stripSystemConfig && Array.isArray(parsed.system)) {
+    const keepBlocks = [];
+    const moveBlocks = [];
+    for (const block of parsed.system) {
+      const text = block.text || '';
+      if (text.includes('# SOUL.md') || text.length > 2000) {
+        moveBlocks.push(text);
+      } else {
+        keepBlocks.push(block);
+      }
+    }
+    if (moveBlocks.length > 0) {
+      const movedText = moveBlocks.join('\n\n');
+      parsed.system = keepBlocks;
+      if (!Array.isArray(parsed.messages)) parsed.messages = [];
+      parsed.messages.unshift(
+        { role: 'user', content: '[CONTEXT]\n' + movedText },
+        { role: 'assistant', content: 'Understood.' }
+      );
+      console.log(`[RELOCATE] Moved ${movedText.length} chars from system to messages`);
+    }
+  }
+
+  // Inject CC tool stubs
   if (config.injectCCStubs) {
-    const toolsIdx = m.indexOf('"tools":[');
-    if (toolsIdx !== -1) {
-      const insertAt = toolsIdx + '"tools":['.length;
-      m = m.slice(0, insertAt) + CC_TOOL_STUBS.join(',') + ',' + m.slice(insertAt);
+    if (!Array.isArray(parsed.tools)) parsed.tools = [];
+    for (const stub of CC_TOOL_STUBS) {
+      parsed.tools.unshift(JSON.parse(stub));
     }
   }
 
   // Layer 1: Billing header injection
-  const sysArrayIdx = m.indexOf('"system":[');
-  if (sysArrayIdx !== -1) {
-    const insertAt = sysArrayIdx + '"system":['.length;
-    m = m.slice(0, insertAt) + BILLING_BLOCK + ',' + m.slice(insertAt);
-  } else if (m.includes('"system":"')) {
-    const sysStart = m.indexOf('"system":"');
-    let i = sysStart + '"system":"'.length;
-    while (i < m.length) {
-      if (m[i] === '\\') { i += 2; continue; }
-      if (m[i] === '"') break;
-      i++;
-    }
-    const sysEnd = i + 1;
-    const originalSysStr = m.slice(sysStart + '"system":'.length, sysEnd);
-    m = m.slice(0, sysStart)
-      + '"system":[' + BILLING_BLOCK + ',{"type":"text","text":' + originalSysStr + '}]'
-      + m.slice(sysEnd);
-  } else {
-    m = '{"system":[' + BILLING_BLOCK + '],' + m.slice(1);
+  if (!Array.isArray(parsed.system)) {
+    parsed.system = parsed.system
+      ? [{ type: 'text', text: String(parsed.system) }]
+      : [];
   }
+  parsed.system.unshift(JSON.parse(BILLING_BLOCK));
 
-  return m;
+  return JSON.stringify(parsed);
 }
 
 // --- Response Processing -----------------------------------------------------
