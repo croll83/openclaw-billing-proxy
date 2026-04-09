@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 /**
- * Troubleshoot script for OpenClaw Billing Proxy
+ * Troubleshoot script for Hermes Billing Proxy
  *
  * Runs diagnostic checks to identify why the proxy isn't working.
- * Tests each layer independently: credentials, token, billing header,
- * sanitization, and full request.
+ * Tests credentials, token, billing header, and proxy connectivity.
  *
  * Usage: node troubleshoot.js
  */
@@ -33,7 +32,7 @@ function info(msg) {
   console.log('  [INFO] ' + msg);
 }
 
-// ─── Step 1: Find credentials ───────────────────────────────────────────────
+// --- Step 1: Find credentials ------------------------------------------------
 console.log('\n1. Checking Claude Code credentials...\n');
 
 const credsPaths = [
@@ -71,57 +70,20 @@ for (const p of credsPaths) {
   }
 }
 
-// macOS Keychain fallback
-if (!credsPath && process.platform === 'darwin') {
-  info('No credential files found. Checking macOS Keychain...');
-  const { execSync } = require('child_process');
-  const keychainNames = ['claude-code', 'claude', 'com.anthropic.claude-code'];
-  for (const svc of keychainNames) {
-    try {
-      const token = execSync('security find-generic-password -s "' + svc + '" -w 2>/dev/null', { encoding: 'utf8' }).trim();
-      if (token) {
-        ok('Token found in macOS Keychain', 'service: ' + svc);
-        try {
-          creds = JSON.parse(token);
-        } catch(e) {
-          if (token.startsWith('sk-ant-')) {
-            creds = { claudeAiOauth: { accessToken: token, expiresAt: Date.now() + 86400000, subscriptionType: 'unknown' } };
-            info('Raw token extracted (not full JSON structure)');
-          }
-        }
-        if (creds && creds.claudeAiOauth) {
-          credsPath = path.join(homeDir, '.claude', '.credentials.json');
-          info('To make this permanent, run: node setup.js');
-          info('Setup will extract the Keychain token to a file for the proxy');
-        }
-        break;
-      }
-    } catch(e) { /* not found */ }
-  }
-  if (!creds) {
-    fail('Token not found in macOS Keychain either');
-  }
-}
-
 if (!credsPath || !creds) {
-  if (!creds) fail('No credentials found anywhere');
+  if (!creds) fail('No credentials found');
   info('');
   info('Searched files: ' + credsPaths.join(', '));
-  if (process.platform === 'darwin') {
-    info('Searched Keychain: claude-code, claude, com.anthropic.claude-code');
-  }
   info('');
   info('To fix:');
   info('  npm install -g @anthropic-ai/claude-code');
   info('  claude auth login');
   info('  claude -p "test" --max-turns 1 --no-session-persistence   (forces credential write)');
-  info('');
-  info('Then run: node setup.js   (auto-extracts Keychain tokens on Mac)');
   console.log('\nCannot continue without credentials. Fix this first.\n');
   process.exit(1);
 }
 
-// ─── Step 2: Check token validity ───────────────────────────────────────────
+// --- Step 2: Check token validity --------------------------------------------
 console.log('\n2. Checking token...\n');
 
 const oauth = creds.claudeAiOauth;
@@ -139,7 +101,7 @@ if (expiresIn > 0) {
   info('Or open Claude Code CLI briefly -- it auto-refreshes');
 }
 
-// ─── Step 3: Test API connectivity ──────────────────────────────────────────
+// --- Step 3: Test API connectivity -------------------------------------------
 console.log('\n3. Testing API connectivity...\n');
 
 function apiTest(name, body, headers) {
@@ -216,8 +178,6 @@ async function runTests() {
   } else {
     fail('Billing header rejected', 'Status ' + billing.status);
     try { info('Error: ' + JSON.parse(billing.body).error.message); } catch(e) {}
-    info('Your Claude Code version may use a different billing header');
-    info('Run the capture proxy to get YOUR billing header (see README)');
   }
 
   // Test 3c: With billing header (Sonnet)
@@ -237,34 +197,13 @@ async function runTests() {
     ok('Sonnet works', 'Status 200, overage=' + sonnet.overage);
   } else if (sonnet.status === 429) {
     info('Sonnet rate limited (429) -- try again in a few minutes');
-    info('This is normal if you have active Claude Code sessions');
   } else {
     fail('Sonnet failed', 'Status ' + sonnet.status);
     try { info('Error: ' + JSON.parse(sonnet.body).error.message); } catch(e) {}
   }
 
-  // Test 3d: With "OpenClaw" in body (should fail without sanitization)
-  console.log('\n6. Testing trigger phrase detection...\n');
-
-  const trigger = await apiTest('trigger-test', {
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 8,
-    system: [
-      { type: 'text', text: 'x-anthropic-billing-header: cc_version=2.1.80.a46; cc_entrypoint=sdk-cli; cch=00000;' },
-      { type: 'text', text: 'You are a personal assistant running inside OpenClaw.' }
-    ],
-    messages: [{ role: 'user', content: 'Say OK' }]
-  });
-
-  if (trigger.status === 400) {
-    ok('Trigger detection confirmed', '"running inside OpenClaw" correctly triggers rejection');
-    info('This is expected -- the proxy sanitizes this phrase');
-  } else if (trigger.status === 200) {
-    info('Trigger phrase was NOT detected (unexpected) -- detection may have changed');
-  }
-
-  // Test 3e: Check if proxy is running
-  console.log('\n7. Checking proxy...\n');
+  // Test 3d: Check if proxy is running
+  console.log('\n6. Checking proxy...\n');
 
   const proxyCheck = await new Promise((resolve) => {
     const req = http.request({
@@ -282,7 +221,7 @@ async function runTests() {
   if (proxyCheck.status === 200) {
     try {
       const health = JSON.parse(proxyCheck.body);
-      ok('Proxy running', 'Port 18801, ' + health.requestsServed + ' requests served, ' + health.replacementPatterns + ' patterns');
+      ok('Proxy running', 'Port 18801, ' + health.requestsServed + ' requests served');
       if (health.tokenExpiresInHours && parseFloat(health.tokenExpiresInHours) <= 0) {
         fail('Proxy token expired', 'Run: claude auth login');
       }
@@ -294,15 +233,15 @@ async function runTests() {
     info('Start it with: node proxy.js');
   }
 
-  // Test 3f: Send a test request through the proxy
+  // Test 3e: End-to-end through proxy
   if (proxyCheck.status === 200) {
-    console.log('\n8. Testing end-to-end through proxy...\n');
+    console.log('\n7. Testing end-to-end through proxy...\n');
 
     const e2e = await new Promise((resolve) => {
       const body = JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 8,
-        system: 'You are a personal assistant running inside OpenClaw. Test with sessions_spawn and sessions_yield.',
+        system: 'Test message from hermes.',
         messages: [{ role: 'user', content: 'Say E2E_OK' }]
       });
       const req = http.request({
@@ -325,36 +264,27 @@ async function runTests() {
     });
 
     if (e2e.status === 200) {
-      ok('End-to-end test PASSED', 'Request with trigger phrases went through proxy successfully');
+      ok('End-to-end test PASSED', 'Request went through proxy successfully');
     } else {
       fail('End-to-end test FAILED', 'Status ' + e2e.status);
       try {
         const err = JSON.parse(e2e.body);
-        if (err.error) {
-          info('Error: ' + err.error.message);
-          if (err.error.message.includes('extra usage') || err.error.message.includes('Third-party')) {
-            info('');
-            info('The proxy is not fully sanitizing your request body.');
-            info('Your OpenClaw version may have additional trigger terms.');
-            info('Add more patterns to config.json replacements array.');
-            info('See README for troubleshooting guidance.');
-          }
-        }
+        if (err.error) info('Error: ' + err.error.message);
       } catch(e) {
         info('Response: ' + e2e.body.substring(0, 200));
       }
     }
   }
 
-  // ─── Summary ──────────────────────────────────────────────────────────────
+  // --- Summary ---------------------------------------------------------------
   console.log('\n---------------------------------');
   console.log('  Results: ' + passed + ' passed, ' + failed + ' failed');
   console.log('---------------------------------\n');
 
   if (failed === 0) {
-    console.log('  Everything looks good! If OpenClaw requests still fail,');
-    console.log('  check the proxy console for 400 errors and add sanitization');
-    console.log('  patterns to config.json for any trigger terms in your content.\n');
+    console.log('  Everything looks good! If Hermes requests still fail,');
+    console.log('  check the proxy console for 400 errors and add keyword');
+    console.log('  patterns to config.json.\n');
   } else {
     console.log('  Fix the FAIL items above and run this script again.\n');
   }

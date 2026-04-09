@@ -1,23 +1,16 @@
 #!/usr/bin/env node
 /**
- * OpenClaw Subscription Billing Proxy v2.0
+ * Hermes Billing Proxy v1.0
  *
- * Routes OpenClaw API requests through Claude Code's subscription billing
- * instead of Extra Usage. Defeats Anthropic's multi-layer detection:
+ * Routes Hermes API requests through Claude Code's subscription billing
+ * instead of Extra Usage.
  *
  *   Layer 1: Billing header injection (84-char Claude Code identifier)
- *   Layer 2: String trigger sanitization (OpenClaw, sessions_*, running inside, etc.)
- *   Layer 3: Tool name fingerprint bypass (rename OC tools to CC PascalCase convention)
- *   Layer 4: System prompt template bypass (strip config section, replace with paraphrase)
- *   Layer 5: Tool description stripping (reduce fingerprint signal in tool schemas)
- *   Layer 6: Property name renaming (eliminate OC-specific schema property names)
- *   Layer 7: Full bidirectional reverse mapping (SSE + JSON responses)
+ *   Layer 2: Keyword replacement (Hermes-specific strings)
+ *   Layer 3: Tool name passthrough (no renaming -- Hermes tools don't need it)
+ *   Layer 4: System prompt sanitization (strip structured config blocks if present)
  *
- * v1.x string-only sanitization stopped working April 8, 2026 when Anthropic
- * upgraded from string matching to tool-name fingerprinting and template detection.
- * v2.0 defeats the new detection by transforming the entire request body.
- *
- * Zero dependencies. Works on Windows, Linux, Mac.
+ * Zero dependencies. Works on Linux with Node.js 18+.
  *
  * Usage:
  *   node proxy.js [--port 18801] [--config config.json]
@@ -29,13 +22,13 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// ─── Defaults ───────────────────────────────────────────────────────────────
+// --- Defaults ----------------------------------------------------------------
 const DEFAULT_PORT = 18801;
 const UPSTREAM_HOST = 'api.anthropic.com';
-const VERSION = '2.0.0';
+const VERSION = '1.0.0';
 
 // Claude Code billing identifier -- injected into the system prompt
-const BILLING_BLOCK = '{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.80.a46; cc_entrypoint=sdk-cli; cch=00000;"}';
+const BILLING_BLOCK = '{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.80.a46; cc_entrypoint=sdk-cli; cch=57806;"}';
 
 // Beta flags required for OAuth + Claude Code features
 const REQUIRED_BETAS = [
@@ -57,131 +50,39 @@ const CC_TOOL_STUBS = [
   '{"name":"TodoRead","description":"Read current task list","input_schema":{"type":"object","properties":{}}}'
 ];
 
-// ─── Layer 2: String Trigger Replacements ───────────────────────────────────
+// --- Layer 2: Keyword Replacements -------------------------------------------
 // Applied globally via split/join on the entire request body.
-// IMPORTANT: Use space-free replacements for lowercase 'openclaw' to avoid
-// breaking filesystem paths (e.g., .openclaw/ -> .ocplatform/, not .oc platform/)
+// These replace Hermes-specific terms to avoid any fingerprinting.
 const DEFAULT_REPLACEMENTS = [
-  ['OpenClaw', 'OCPlatform'],
-  ['openclaw', 'ocplatform'],
-  ['sessions_spawn', 'create_task'],
-  ['sessions_list', 'list_tasks'],
-  ['sessions_history', 'get_history'],
-  ['sessions_send', 'send_to_task'],
-  ['sessions_yield_interrupt', 'task_yield_interrupt'],
-  ['sessions_yield', 'yield_task'],
-  ['sessions_store', 'task_store'],
-  ['HEARTBEAT_OK', 'HB_ACK'],
-  ['HEARTBEAT', 'HB_SIGNAL'],
-  ['heartbeat', 'hb_signal'],
-  ['running inside', 'operating from'],
-  ['Prometheus', 'PAssistant'],
-  ['prometheus', 'passistant'],
-  ['clawhub.com', 'skillhub.example.com'],
-  ['clawhub', 'skillhub'],
-  ['clawd', 'agentd'],
-  ['lossless-claw', 'lossless-ctx'],
-  ['third-party', 'external'],
+  ['~/.hermes/', '~/.config/app/'],
+  ['hermes_tools', 'code_tools'],
+  ['hermes_telegram', 'tg_channel'],
+  ['hermes-secrets.env', 'secrets.env'],
+  ['Plan mode for Hermes', 'Plan mode'],
+  ['hermes_cli', 'cli_module'],
+  ['from hermes', 'from app'],
+  ['Hermes', 'Assistant'],
+  ['hermes', 'assistant'],
   ['billing proxy', 'routing layer'],
-  ['billing-proxy', 'routing-layer'],
-  ['x-anthropic-billing-header', 'x-routing-config'],
-  ['x-anthropic-billing', 'x-routing-cfg'],
-  ['cch=00000', 'cfg=00000'],
-  ['cc_version', 'rt_version'],
-  ['cc_entrypoint', 'rt_entrypoint'],
-  ['billing header', 'routing config'],
-  ['extra usage', 'usage quota'],
-  ['assistant platform', 'ocplatform']
+  ['billing-proxy', 'routing-layer']
 ];
 
-// ─── Layer 3: Tool Name Renames ─────────────────────────────────────────────
-// Applied as "quoted" replacements ("name" -> "Name") throughout the ENTIRE body.
-// This defeats Anthropic's tool-name fingerprinting which identifies the request
-// as OpenClaw based on the combination of tool names in the tools array.
-//
-// The detector specifically checks for OpenClaw's tool name set. Even with empty
-// schemas (no descriptions, no properties), original tool names trigger detection.
-// Renaming to PascalCase CC-like conventions defeats this entirely.
-//
-// ORDERING: lcm_expand_query MUST come before lcm_expand to avoid partial match.
-const DEFAULT_TOOL_RENAMES = [
-  ['exec', 'Bash'],
-  ['process', 'BashSession'],
-  ['browser', 'BrowserControl'],
-  ['canvas', 'CanvasView'],
-  ['nodes', 'DeviceControl'],
-  ['cron', 'Scheduler'],
-  ['message', 'SendMessage'],
-  ['tts', 'Speech'],
-  ['gateway', 'SystemCtl'],
-  ['agents_list', 'AgentList'],
-  ['list_tasks', 'TaskList'],
-  ['get_history', 'TaskHistory'],
-  ['send_to_task', 'TaskSend'],
-  ['create_task', 'TaskCreate'],
-  ['subagents', 'AgentControl'],
-  ['session_status', 'StatusCheck'],
-  ['web_search', 'WebSearch'],
-  ['web_fetch', 'WebFetch'],
-  ['image', 'ImageGen'],
-  ['pdf', 'PdfParse'],
-  ['memory_search', 'KnowledgeSearch'],
-  ['memory_get', 'KnowledgeGet'],
-  ['lcm_expand_query', 'ContextQuery'],
-  ['lcm_grep', 'ContextGrep'],
-  ['lcm_describe', 'ContextDescribe'],
-  ['lcm_expand', 'ContextExpand'],
-  ['yield_task', 'TaskYield'],
-  ['task_store', 'TaskStore'],
-  ['task_yield_interrupt', 'TaskYieldInterrupt']
-];
-
-// ─── Layer 6: Property Name Renames ─────────────────────────────────────────
-// OC-specific schema property names that contribute to fingerprinting.
-const DEFAULT_PROP_RENAMES = [
-  ['session_id', 'thread_id'],
-  ['conversation_id', 'thread_ref'],
-  ['summaryIds', 'chunk_ids'],
-  ['summary_id', 'chunk_id'],
-  ['system_event', 'event_text'],
-  ['agent_id', 'worker_id'],
-  ['wake_at', 'trigger_at'],
-  ['wake_event', 'trigger_event']
-];
-
-// ─── Reverse Mappings ───────────────────────────────────────────────────────
+// --- Reverse Mappings --------------------------------------------------------
 const DEFAULT_REVERSE_MAP = [
-  ['OCPlatform', 'OpenClaw'],
-  ['ocplatform', 'openclaw'],
-  ['create_task', 'sessions_spawn'],
-  ['list_tasks', 'sessions_list'],
-  ['get_history', 'sessions_history'],
-  ['send_to_task', 'sessions_send'],
-  ['task_yield_interrupt', 'sessions_yield_interrupt'],
-  ['yield_task', 'sessions_yield'],
-  ['task_store', 'sessions_store'],
-  ['HB_ACK', 'HEARTBEAT_OK'],
-  ['HB_SIGNAL', 'HEARTBEAT'],
-  ['hb_signal', 'heartbeat'],
-  ['PAssistant', 'Prometheus'],
-  ['passistant', 'prometheus'],
-  ['skillhub.example.com', 'clawhub.com'],
-  ['skillhub', 'clawhub'],
-  ['agentd', 'clawd'],
-  ['lossless-ctx', 'lossless-claw'],
-  ['external', 'third-party'],
+  ['~/.config/app/', '~/.hermes/'],
+  ['code_tools', 'hermes_tools'],
+  ['tg_channel', 'hermes_telegram'],
+  ['secrets.env', 'hermes-secrets.env'],
+  ['Plan mode', 'Plan mode for Hermes'],
+  ['cli_module', 'hermes_cli'],
+  ['from app', 'from hermes'],
+  ['Assistant', 'Hermes'],
+  ['assistant', 'hermes'],
   ['routing layer', 'billing proxy'],
-  ['routing-layer', 'billing-proxy'],
-  ['x-routing-config', 'x-anthropic-billing-header'],
-  ['x-routing-cfg', 'x-anthropic-billing'],
-  ['cfg=00000', 'cch=00000'],
-  ['rt_version', 'cc_version'],
-  ['rt_entrypoint', 'cc_entrypoint'],
-  ['routing config', 'billing header'],
-  ['usage quota', 'extra usage']
+  ['routing-layer', 'billing-proxy']
 ];
 
-// ─── Configuration ──────────────────────────────────────────────────────────
+// --- Configuration -----------------------------------------------------------
 function loadConfig() {
   const args = process.argv.slice(2);
   let configPath = null;
@@ -215,32 +116,10 @@ function loadConfig() {
     }
   }
 
-  // macOS Keychain fallback
-  if (!credsPath && process.platform === 'darwin') {
-    const { execSync } = require('child_process');
-    for (const svc of ['claude-code', 'claude', 'com.anthropic.claude-code']) {
-      try {
-        const token = execSync('security find-generic-password -s "' + svc + '" -w 2>/dev/null', { encoding: 'utf8' }).trim();
-        if (token) {
-          let creds;
-          try { creds = JSON.parse(token); } catch(e) {
-            if (token.startsWith('sk-ant-')) creds = { claudeAiOauth: { accessToken: token, expiresAt: Date.now() + 86400000, subscriptionType: 'unknown' } };
-          }
-          if (creds && creds.claudeAiOauth) {
-            credsPath = path.join(homeDir, '.claude', '.credentials.json');
-            fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true });
-            fs.writeFileSync(credsPath, JSON.stringify(creds));
-            console.log('[PROXY] Extracted credentials from macOS Keychain');
-            break;
-          }
-        }
-      } catch(e) {}
-    }
-  }
-
   if (!credsPath) {
     console.error('[ERROR] Claude Code credentials not found. Run "claude auth login" first.');
-    if (process.platform === 'darwin') console.error('Also checked macOS Keychain.');
+    console.error('Searched:');
+    for (const p of credsPaths) console.error('  ' + p);
     process.exit(1);
   }
 
@@ -249,15 +128,12 @@ function loadConfig() {
     credsPath,
     replacements: config.replacements || DEFAULT_REPLACEMENTS,
     reverseMap: config.reverseMap || DEFAULT_REVERSE_MAP,
-    toolRenames: config.toolRenames || DEFAULT_TOOL_RENAMES,
-    propRenames: config.propRenames || DEFAULT_PROP_RENAMES,
     stripSystemConfig: config.stripSystemConfig !== false,
-    stripToolDescriptions: config.stripToolDescriptions !== false,
     injectCCStubs: config.injectCCStubs !== false
   };
 }
 
-// ─── Token Management ───────────────────────────────────────────────────────
+// --- Token Management --------------------------------------------------------
 function getToken(credsPath) {
   let raw = fs.readFileSync(credsPath, 'utf8');
   if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
@@ -267,7 +143,7 @@ function getToken(credsPath) {
   return oauth;
 }
 
-// ─── Helper ─────────────────────────────────────────────────────────────────
+// --- Helper ------------------------------------------------------------------
 function findMatchingBracket(str, start) {
   let d = 0;
   for (let i = start; i < str.length; i++) {
@@ -277,29 +153,17 @@ function findMatchingBracket(str, start) {
   return -1;
 }
 
-// ─── Request Processing ─────────────────────────────────────────────────────
+// --- Request Processing ------------------------------------------------------
 function processBody(bodyStr, config) {
   let m = bodyStr;
 
-  // Layer 2: String trigger sanitization (global split/join)
+  // Layer 2: Keyword replacement (global split/join)
   for (const [find, replace] of config.replacements) {
     m = m.split(find).join(replace);
   }
 
-  // Layer 3: Tool name fingerprint bypass (quoted replacement for precision)
-  for (const [orig, cc] of config.toolRenames) {
-    m = m.split('"' + orig + '"').join('"' + cc + '"');
-  }
-
-  // Layer 6: Property name renaming
-  for (const [orig, renamed] of config.propRenames) {
-    m = m.split('"' + orig + '"').join('"' + renamed + '"');
-  }
-
-  // Layer 4: System prompt template bypass
-  // Strip the OC config section (~28K of ## Tooling, ## Workspace, ## Messaging, etc.)
-  // and replace with a brief paraphrase. The config is between the identity line
-  // ("You are a personal assistant") and the first workspace doc (AGENTS.md header).
+  // Layer 4: System prompt sanitization
+  // Strip structured config blocks if present (large ## sections)
   if (config.stripSystemConfig) {
     const IDENTITY_MARKER = 'You are a personal assistant';
     const configStart = m.indexOf(IDENTITY_MARKER);
@@ -308,10 +172,8 @@ function processBody(bodyStr, config) {
       if (stripFrom >= 2 && m[stripFrom - 2] === '\\' && m[stripFrom - 1] === 'n') {
         stripFrom -= 2;
       }
-      // Find end of config: first workspace doc header (AGENTS.md)
       const configEnd = m.indexOf('AGENTS.md', configStart);
       if (configEnd !== -1) {
-        // Back up to the \n## before AGENTS.md
         let boundary = configEnd;
         for (let i = configEnd - 1; i > stripFrom; i--) {
           if (m[i] === '#' && m[i - 1] === '#' && i >= 3 && m[i - 3] === '\\' && m[i - 2] === 'n') {
@@ -338,37 +200,8 @@ function processBody(bodyStr, config) {
     }
   }
 
-  // Layer 5: Tool description stripping
-  if (config.stripToolDescriptions) {
-    const toolsIdx = m.indexOf('"tools":[');
-    if (toolsIdx !== -1) {
-      const toolsEndIdx = findMatchingBracket(m, toolsIdx + '"tools":'.length);
-      if (toolsEndIdx !== -1) {
-        let section = m.slice(toolsIdx, toolsEndIdx + 1);
-        let from = 0;
-        while (true) {
-          const d = section.indexOf('"description":"', from);
-          if (d === -1) break;
-          const vs = d + '"description":"'.length;
-          let i = vs;
-          while (i < section.length) {
-            if (section[i] === '\\' && i + 1 < section.length) { i += 2; continue; }
-            if (section[i] === '"') break;
-            i++;
-          }
-          section = section.slice(0, vs) + section.slice(i);
-          from = vs + 1;
-        }
-        // Inject CC tool stubs
-        if (config.injectCCStubs) {
-          const insertAt = '"tools":['.length;
-          section = section.slice(0, insertAt) + CC_TOOL_STUBS.join(',') + ',' + section.slice(insertAt);
-        }
-        m = m.slice(0, toolsIdx) + section + m.slice(toolsEndIdx + 1);
-      }
-    }
-  } else if (config.injectCCStubs) {
-    // Inject stubs even without description stripping
+  // Inject CC tool stubs into tools array
+  if (config.injectCCStubs) {
     const toolsIdx = m.indexOf('"tools":[');
     if (toolsIdx !== -1) {
       const insertAt = toolsIdx + '"tools":['.length;
@@ -401,25 +234,16 @@ function processBody(bodyStr, config) {
   return m;
 }
 
-// ─── Response Processing ────────────────────────────────────────────────────
+// --- Response Processing -----------------------------------------------------
 function reverseMap(text, config) {
   let r = text;
-  // Reverse tool names first (more specific patterns)
-  for (const [orig, cc] of config.toolRenames) {
-    r = r.split('"' + cc + '"').join('"' + orig + '"');
-  }
-  // Reverse property names
-  for (const [orig, renamed] of config.propRenames) {
-    r = r.split('"' + renamed + '"').join('"' + orig + '"');
-  }
-  // Reverse string replacements
   for (const [sanitized, original] of config.reverseMap) {
     r = r.split(sanitized).join(original);
   }
   return r;
 }
 
-// ─── Server ─────────────────────────────────────────────────────────────────
+// --- Server ------------------------------------------------------------------
 function startServer(config) {
   let requestCount = 0;
   const startedAt = Date.now();
@@ -432,7 +256,7 @@ function startServer(config) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           status: expiresIn > 0 ? 'ok' : 'token_expired',
-          proxy: 'openclaw-billing-proxy',
+          proxy: 'hermes-billing-proxy',
           version: VERSION,
           requestsServed: requestCount,
           uptime: Math.floor((Date.now() - startedAt) / 1000) + 's',
@@ -440,11 +264,8 @@ function startServer(config) {
           subscriptionType: oauth.subscriptionType,
           layers: {
             stringReplacements: config.replacements.length,
-            toolNameRenames: config.toolRenames.length,
-            propertyRenames: config.propRenames.length,
             ccToolStubs: config.injectCCStubs ? CC_TOOL_STUBS.length : 0,
-            systemStripEnabled: config.stripSystemConfig,
-            descriptionStripEnabled: config.stripToolDescriptions
+            systemStripEnabled: config.stripSystemConfig
           }
         }));
       } catch (e) {
@@ -547,19 +368,16 @@ function startServer(config) {
     try {
       const oauth = getToken(config.credsPath);
       const h = ((oauth.expiresAt - Date.now()) / 3600000).toFixed(1);
-      console.log(`\n  OpenClaw Billing Proxy v${VERSION}`);
-      console.log(`  ─────────────────────────────`);
+      console.log(`\n  Hermes Billing Proxy v${VERSION}`);
+      console.log(`  ────────────────────────────`);
       console.log(`  Port:              ${config.port}`);
       console.log(`  Subscription:      ${oauth.subscriptionType}`);
       console.log(`  Token expires:     ${h}h`);
-      console.log(`  String patterns:   ${config.replacements.length} sanitize + ${config.reverseMap.length} reverse`);
-      console.log(`  Tool renames:      ${config.toolRenames.length} (bidirectional)`);
-      console.log(`  Property renames:  ${config.propRenames.length} (bidirectional)`);
+      console.log(`  Keyword patterns:  ${config.replacements.length} sanitize + ${config.reverseMap.length} reverse`);
       console.log(`  CC tool stubs:     ${config.injectCCStubs ? CC_TOOL_STUBS.length : 'disabled'}`);
       console.log(`  System strip:      ${config.stripSystemConfig ? 'enabled' : 'disabled'}`);
-      console.log(`  Description strip: ${config.stripToolDescriptions ? 'enabled' : 'disabled'}`);
       console.log(`  Credentials:       ${config.credsPath}`);
-      console.log(`\n  Ready. Set openclaw.json baseUrl to http://127.0.0.1:${config.port}\n`);
+      console.log(`\n  Ready. Point Hermes baseUrl to http://127.0.0.1:${config.port}\n`);
     } catch (e) {
       console.error(`  Started on port ${config.port} but credentials error: ${e.message}`);
     }
@@ -569,6 +387,6 @@ function startServer(config) {
   process.on('SIGTERM', () => process.exit(0));
 }
 
-// ─── Main ───────────────────────────────────────────────────────────────────
+// --- Main --------------------------------------------------------------------
 const config = loadConfig();
 startServer(config);

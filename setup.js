@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Setup script for OpenClaw Billing Proxy
+ * Setup script for Hermes Billing Proxy
  *
- * Auto-detects OpenClaw configuration, scans for sessions_* tools,
- * and generates sanitization + reverse mapping rules.
+ * Auto-detects Claude Code credentials and Hermes installation,
+ * generates config.json with keyword replacement rules.
  *
  * Usage: node setup.js
  */
@@ -14,8 +14,8 @@ const os = require('os');
 
 const homeDir = os.homedir();
 
-console.log('\n  OpenClaw Billing Proxy Setup');
-console.log('  ---------------------------\n');
+console.log('\n  Hermes Billing Proxy Setup');
+console.log('  -------------------------\n');
 
 // Step 1: Check Claude Code auth
 console.log('1. Checking Claude Code authentication...');
@@ -27,7 +27,6 @@ const credsPaths = [
 let credsPath = null;
 let creds = null;
 
-// Check file-based credentials
 for (const p of credsPaths) {
   if (fs.existsSync(p)) {
     const stat = fs.statSync(p);
@@ -44,59 +43,7 @@ for (const p of credsPaths) {
   }
 }
 
-// If no file-based credentials, try macOS Keychain
-if (!creds && process.platform === 'darwin') {
-  console.log('   File credentials not found, checking macOS Keychain...');
-  const { execSync } = require('child_process');
-
-  // Try common Keychain service names
-  const keychainNames = ['claude-code', 'claude', 'com.anthropic.claude-code'];
-  let keychainToken = null;
-
-  for (const svc of keychainNames) {
-    try {
-      keychainToken = execSync('security find-generic-password -s "' + svc + '" -w 2>/dev/null', { encoding: 'utf8' }).trim();
-      if (keychainToken) {
-        console.log('   Found token in macOS Keychain (service: ' + svc + ')');
-        break;
-      }
-    } catch (e) { /* not found, try next */ }
-  }
-
-  if (keychainToken) {
-    // The Keychain might store the full JSON or just the token
-    try {
-      const parsed = JSON.parse(keychainToken);
-      if (parsed.claudeAiOauth && parsed.claudeAiOauth.accessToken) {
-        creds = parsed;
-      }
-    } catch (e) {
-      // Raw token string -- wrap in expected structure
-      if (keychainToken.startsWith('sk-ant-')) {
-        creds = {
-          claudeAiOauth: {
-            accessToken: keychainToken,
-            expiresAt: Date.now() + 86400000, // assume 24h -- will be refreshed
-            subscriptionType: 'unknown'
-          }
-        };
-        console.log('   Extracted raw token from Keychain');
-      }
-    }
-
-    if (creds) {
-      // Write credentials to file so the proxy can read them
-      credsPath = path.join(homeDir, '.claude', '.credentials.json');
-      const claudeDir = path.join(homeDir, '.claude');
-      if (!fs.existsSync(claudeDir)) { fs.mkdirSync(claudeDir, { recursive: true }); }
-      fs.writeFileSync(credsPath, JSON.stringify(creds));
-      console.log('   Written Keychain credentials to: ' + credsPath);
-      console.log('   NOTE: You may need to re-run this after token refresh (every ~24h)');
-    }
-  }
-}
-
-// If still no credentials, try forcing a credential write via claude CLI
+// If no credentials found, try triggering a credential write via claude CLI
 if (!creds) {
   console.log('   No credentials found. Attempting to trigger credential write...');
   const { execSync } = require('child_process');
@@ -105,7 +52,6 @@ if (!creds) {
       timeout: 30000,
       stdio: 'pipe'
     });
-    // Re-check files after the CLI call
     for (const p of credsPaths) {
       if (fs.existsSync(p) && fs.statSync(p).size > 0) {
         try {
@@ -137,183 +83,67 @@ if (!creds) {
   console.error('');
   console.error('   Searched for credentials at:');
   for (const p of credsPaths) { console.error('     ' + p); }
-  if (process.platform === 'darwin') {
-    console.error('     macOS Keychain (claude-code, claude, com.anthropic.claude-code)');
-  }
-  console.error('');
-  console.error('   If claude auth status shows you are logged in but no file exists,');
-  console.error('   your Claude Code version stores tokens in the macOS Keychain.');
-  console.error('   Run: claude -p "test" --max-turns 1 --no-session-persistence');
-  console.error('   Then try this setup again.');
   process.exit(1);
 }
 
 const expiresIn = ((creds.claudeAiOauth.expiresAt - Date.now()) / 3600000).toFixed(1);
 console.log('   OK: ' + (creds.claudeAiOauth.subscriptionType || 'unknown') + ' subscription, token expires in ' + expiresIn + 'h');
 
-// Step 2: Find OpenClaw config
-console.log('\n2. Finding OpenClaw configuration...');
-const oclawPaths = [
-  path.join(homeDir, '.openclaw', 'openclaw.json'),
-  '/etc/openclaw/openclaw.json'
+// Step 2: Find Hermes installation
+console.log('\n2. Checking Hermes installation...');
+const hermesPaths = [
+  '/opt/hermes-agent',
+  path.join(homeDir, '.hermes')
 ];
 
-let oclawPath = null;
-for (const p of oclawPaths) {
-  if (fs.existsSync(p)) { oclawPath = p; break; }
+let hermesPath = null;
+for (const p of hermesPaths) {
+  if (fs.existsSync(p)) {
+    hermesPath = p;
+    break;
+  }
 }
 
-// Build replacement and reverse map lists
+if (hermesPath) {
+  console.log('   Found Hermes at: ' + hermesPath);
+} else {
+  console.log('   Hermes installation not found at standard paths (optional)');
+  console.log('   Checked: ' + hermesPaths.join(', '));
+}
+
+// Step 3: Build replacement rules
+console.log('\n3. Generating keyword replacement rules...');
+
 const replacements = [
-  ['OpenClaw', 'OCPlatform'],
-  ['openclaw', 'ocplatform'],
-  ['HEARTBEAT_OK', 'HB_ACK'],
-  ['running inside', 'running on']
+  ['~/.hermes/', '~/.config/app/'],
+  ['hermes_tools', 'code_tools'],
+  ['hermes_telegram', 'tg_channel'],
+  ['hermes-secrets.env', 'secrets.env'],
+  ['Plan mode for Hermes', 'Plan mode'],
+  ['hermes_cli', 'cli_module'],
+  ['from hermes', 'from app'],
+  ['Hermes', 'Assistant'],
+  ['hermes', 'assistant'],
+  ['billing proxy', 'routing layer'],
+  ['billing-proxy', 'routing-layer']
 ];
 
 const reverseMap = [
-  ['OCPlatform', 'OpenClaw'],
-  ['ocplatform', 'openclaw'],
-  ['HB_ACK', 'HEARTBEAT_OK']
+  ['~/.config/app/', '~/.hermes/'],
+  ['code_tools', 'hermes_tools'],
+  ['tg_channel', 'hermes_telegram'],
+  ['secrets.env', 'hermes-secrets.env'],
+  ['Plan mode', 'Plan mode for Hermes'],
+  ['cli_module', 'hermes_cli'],
+  ['from app', 'from hermes'],
+  ['Assistant', 'Hermes'],
+  ['assistant', 'hermes'],
+  ['routing layer', 'billing proxy'],
+  ['routing-layer', 'billing-proxy']
 ];
 
-// Step 3: Scan for sessions_* tools
-console.log('\n3. Scanning for session management tools...');
-
-if (oclawPath) {
-  console.log('   Found: ' + oclawPath);
-  const oclawConfig = JSON.parse(fs.readFileSync(oclawPath, 'utf8'));
-
-  const baseUrl = (oclawConfig.models && oclawConfig.models.providers &&
-    oclawConfig.models.providers.anthropic && oclawConfig.models.providers.anthropic.baseUrl) || 'unknown';
-  console.log('   Current baseUrl: ' + baseUrl);
-
-  // Scan OpenClaw source for DEFAULT_TOOL_ALLOW to find all sessions_* tools
-  const oclawDir = path.dirname(oclawPath);
-  const distDir = path.join(oclawDir, '..', 'node_modules', 'openclaw', 'dist');
-  const globalDist = '/usr/lib/node_modules/openclaw/dist';
-  const npmGlobalDist = path.join(homeDir, '.npm-global', 'lib', 'node_modules', 'openclaw', 'dist');
-
-  const distPaths = [distDir, globalDist, npmGlobalDist];
-  // Also check npm global on Windows
-  if (process.platform === 'win32') {
-    distPaths.push(path.join(process.env.APPDATA || '', 'npm', 'node_modules', 'openclaw', 'dist'));
-  }
-  // Check NVM install paths
-  const nvmDir = path.join(homeDir, '.nvm', 'versions', 'node');
-  if (fs.existsSync(nvmDir)) {
-    try {
-      const versions = fs.readdirSync(nvmDir);
-      for (const v of versions) {
-        distPaths.push(path.join(nvmDir, v, 'lib', 'node_modules', 'openclaw', 'dist'));
-      }
-    } catch (e) { /* skip */ }
-  }
-
-  let sessionTools = [];
-  for (const dp of distPaths) {
-    if (!fs.existsSync(dp)) continue;
-    try {
-      const files = fs.readdirSync(dp).filter(function(f) { return f.endsWith('.js'); });
-      for (const f of files) {
-        const content = fs.readFileSync(path.join(dp, f), 'utf8');
-        const matches = content.match(/sessions_[a-z_]+/g);
-        if (matches) {
-          for (const m of matches) {
-            if (sessionTools.indexOf(m) === -1) sessionTools.push(m);
-          }
-        }
-      }
-      if (sessionTools.length > 0) {
-        console.log('   Found OpenClaw dist at: ' + dp);
-        break;
-      }
-    } catch (e) { /* skip */ }
-  }
-
-  if (sessionTools.length === 0) {
-    // Fallback: use known sessions_* tools
-    sessionTools = ['sessions_spawn', 'sessions_list', 'sessions_history', 'sessions_send', 'sessions_yield_interrupt', 'sessions_yield', 'sessions_store'];
-    console.log('   Using default sessions_* tool list (could not scan source)');
-  } else {
-    console.log('   Detected sessions_* tools: ' + sessionTools.join(', '));
-  }
-
-  // Generate replacement pairs for each sessions_* tool
-  const sessionReplacements = {
-    'sessions_spawn': 'create_task',
-    'sessions_list': 'list_tasks',
-    'sessions_history': 'get_history',
-    'sessions_send': 'send_to_task',
-    'sessions_yield_interrupt': 'task_yield_interrupt',
-    'sessions_yield': 'yield_task',
-    'sessions_store': 'task_store'
-  };
-
-  for (const tool of sessionTools) {
-    const replacement = sessionReplacements[tool] || tool.replace('sessions_', 'task_');
-    replacements.push([tool, replacement]);
-    reverseMap.push([replacement, tool]);
-    console.log('   ' + tool + ' -> ' + replacement);
-  }
-
-  // Detect assistant name from workspace files
-  const workspaceDir = (oclawConfig.agents && oclawConfig.agents.defaults &&
-    oclawConfig.agents.defaults.workspace) || null;
-  if (workspaceDir) {
-    const identityFiles = ['SOUL.md', 'USER.md', 'AGENTS.md'];
-    for (const f of identityFiles) {
-      const fPath = path.join(workspaceDir, f);
-      if (fs.existsSync(fPath)) {
-        const content = fs.readFileSync(fPath, 'utf8');
-        const nameMatch = content.match(/(?:name|assistant|bot)\s*[:=]\s*["']?(\w+)/i);
-        if (nameMatch && nameMatch[1].length > 2 && ['the', 'you', 'your', 'this'].indexOf(nameMatch[1].toLowerCase()) === -1) {
-          console.log('\n   Detected assistant name: ' + nameMatch[1]);
-          console.log('   Note: Assistant names are usually NOT blocked by Anthropic.');
-          console.log('   If requests fail, try adding it to replacements as a test.');
-          break;
-        }
-      }
-    }
-  }
-
-  // Check for clawhub/clawd references in the OpenClaw source
-  for (const dp of distPaths) {
-    if (!fs.existsSync(dp)) continue;
-    try {
-      const indexFile = fs.readdirSync(dp).find(function(f) { return f.startsWith('index'); });
-      if (indexFile) {
-        const content = fs.readFileSync(path.join(dp, indexFile), 'utf8');
-        if (content.includes('clawhub')) {
-          replacements.push(['clawhub.com', 'skillhub.example.com']);
-          replacements.push(['clawhub', 'skillhub']);
-          reverseMap.push(['skillhub.example.com', 'clawhub.com']);
-          reverseMap.push(['skillhub', 'clawhub']);
-          console.log('   Added clawhub sanitization');
-        }
-        if (content.includes('clawd')) {
-          replacements.push(['clawd', 'agentd']);
-          reverseMap.push(['agentd', 'clawd']);
-          console.log('   Added clawd sanitization');
-        }
-      }
-      break;
-    } catch (e) { /* skip */ }
-  }
-} else {
-  console.log('   OpenClaw config not found (using defaults)');
-  // Default sessions_* tools
-  const defaults = [
-    ['sessions_spawn', 'create_task'],
-    ['sessions_list', 'list_tasks'],
-    ['sessions_history', 'get_history'],
-    ['sessions_send', 'send_to_task'],
-    ['sessions_yield', 'yield_task']
-  ];
-  for (const [tool, repl] of defaults) {
-    replacements.push([tool, repl]);
-    reverseMap.push([repl, tool]);
-  }
+for (const [find, replace] of replacements) {
+  console.log('   ' + find + ' -> ' + replace);
 }
 
 // Step 4: Generate config
@@ -323,13 +153,15 @@ const config = {
   port: 18801,
   credentialsPath: credsPath,
   replacements: replacements,
-  reverseMap: reverseMap
+  reverseMap: reverseMap,
+  stripSystemConfig: true,
+  injectCCStubs: true
 };
 
 const configPath = path.join(process.cwd(), 'config.json');
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 console.log('   Written: ' + configPath);
-console.log('   Sanitization patterns: ' + replacements.length);
+console.log('   Keyword patterns: ' + replacements.length);
 console.log('   Reverse map patterns: ' + reverseMap.length);
 
 // Step 5: Instructions
@@ -337,21 +169,11 @@ console.log('\n5. Setup complete!\n');
 console.log('   Next steps:');
 console.log('   -----------');
 console.log('   a) Start the proxy:     node proxy.js');
-console.log('   b) Update OpenClaw:     Set baseUrl to http://127.0.0.1:' + config.port + ' in openclaw.json');
-console.log('   c) Restart gateway:     Restart your OpenClaw gateway');
-console.log('   d) Test:                Send your assistant a message\n');
+console.log('   b) Update Hermes:       Set baseUrl to http://127.0.0.1:' + config.port);
+console.log('   c) Restart Hermes:      Restart your Hermes gateway');
+console.log('   d) Test:                Send a message through Hermes\n');
 
-if (oclawPath) {
-  console.log('   To update baseUrl automatically:');
-  if (process.platform === 'win32') {
-    console.log('     powershell -c "(gc \'' + oclawPath + '\') -replace \'\\\"baseUrl\\\":\\s*\\\"[^\\\"]*\\\"\', \'\\\"baseUrl\\\": \\\"http://127.0.0.1:' + config.port + '\\\"\' | sc \'' + oclawPath + '\'"');
-  } else {
-    console.log('     sed -i \'s|"baseUrl": "[^"]*"|"baseUrl": "http://127.0.0.1:' + config.port + '"|\' \'' + oclawPath + '\'');
-  }
-}
-
-console.log('\n   Troubleshooting:');
+console.log('   Troubleshooting:');
 console.log('   - If requests fail with "extra usage" errors, check proxy console for 400 status codes');
-console.log('   - Add any new sessions_* tools to both replacements and reverseMap in config.json');
-console.log('   - If your assistant name is blocked (rare), add it to replacements and reverseMap');
+console.log('   - Add any new keyword patterns to both replacements and reverseMap in config.json');
 console.log('   - Token refreshes when you open Claude Code CLI -- do this every 24h\n');
