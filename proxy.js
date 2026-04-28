@@ -741,36 +741,9 @@ function processBody(bodyStr, config) {
     parsed.system = rep(parsed.system);
   }
 
-  if (Array.isArray(parsed.messages)) {
-    for (const msg of parsed.messages) {
-      if (typeof msg.content === 'string') {
-        msg.content = rep(msg.content);
-      } else if (Array.isArray(msg.content)) {
-        for (const block of msg.content) {
-          // Never touch thinking / redacted_thinking blocks — Anthropic
-          // checks them for byte-identity across turns.
-          if (block.type === 'thinking' || block.type === 'redacted_thinking') continue;
-          if (block.text) block.text = rep(block.text);
-          if (typeof block.content === 'string') {
-            block.content = rep(block.content);
-          } else if (Array.isArray(block.content)) {
-            for (const inner of block.content) {
-              if (inner && inner.type === 'thinking') continue;
-              if (inner && inner.type === 'redacted_thinking') continue;
-              if (inner && inner.text) inner.text = rep(inner.text);
-            }
-          }
-          if (block.input && typeof block.input === 'object') {
-            for (const k of Object.keys(block.input)) {
-              if (typeof block.input[k] === 'string') {
-                block.input[k] = rep(block.input[k]);
-              }
-            }
-          }
-        }
-      }
-    }
-  }
+  // Layer 2 skip: messages are dynamic conversation content — replacing
+  // keywords here corrupts file paths and tool inputs. Sanitisation is
+  // applied only to system prompt and tool descriptions.
 
   if (Array.isArray(parsed.tools)) {
     for (const tool of parsed.tools) {
