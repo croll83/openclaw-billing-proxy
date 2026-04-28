@@ -34,7 +34,7 @@ const BILLING_BLOCK = '{"type":"text","text":"x-anthropic-billing-header: cc_ver
 const REQUIRED_BETAS = [
   'claude-code-20250219',
   'oauth-2025-04-20',
-  'interleaved-thinking-2025-05-14',
+
   'context-management-2025-06-27',
   'prompt-caching-scope-2026-01-05',
   'effort-2025-11-24'
@@ -308,6 +308,8 @@ function startServer(config) {
       const existingBeta = headers['anthropic-beta'] || '';
       const betas = existingBeta ? existingBeta.split(',').map(b => b.trim()) : [];
       for (const b of REQUIRED_BETAS) { if (!betas.includes(b)) betas.push(b); }
+      // Only add interleaved-thinking beta when the request has thinking enabled
+      try { const parsed = JSON.parse(bodyStr); if (parsed.thinking && parsed.thinking.type === "enabled") { const tb = "interleaved-thinking-2025-05-14"; if (!betas.includes(tb)) betas.push(tb); } } catch {}
       headers['anthropic-beta'] = betas.join(',');
 
       const ts = new Date().toISOString().substring(11, 19);
