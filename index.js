@@ -87,7 +87,7 @@ function startServer(config) {
       let isGemini = false;
       try {
         const peek = JSON.parse(bodyStr);
-        if (peek.model && peek.model.startsWith('gemini-')) {
+        if (peek.model && (peek.model.startsWith('gemini-') || peek.model.startsWith('google/gemini-'))) {
           isGemini = true;
         }
       } catch {}

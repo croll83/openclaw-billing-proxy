@@ -69,7 +69,7 @@ function handleGeminiRequest(bodyStr, req, res, config, reqNum, ts) {
     return;
   }
 
-  const model = parsed.model || 'gemini-2.5-pro';
+  const model = (parsed.model || 'gemini-2.5-pro').replace(/^google\//, '');
   const isStreaming = parsed.stream !== false;
   const useAnthropicFmt = isAnthropicFormat(parsed);
   const reqStartTime = Date.now();
