@@ -230,7 +230,7 @@ async function runTests() {
     }
   } else {
     fail('Proxy not running on port 18801', proxyCheck.error || 'Status ' + proxyCheck.status);
-    info('Start it with: node proxy.js');
+    info('Start it with: node index.js');
   }
 
   // Test 3e: End-to-end through proxy

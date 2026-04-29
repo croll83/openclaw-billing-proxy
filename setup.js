@@ -168,7 +168,7 @@ console.log('   Reverse map patterns: ' + reverseMap.length);
 console.log('\n5. Setup complete!\n');
 console.log('   Next steps:');
 console.log('   -----------');
-console.log('   a) Start the proxy:     node proxy.js');
+console.log('   a) Start the proxy:     node index.js');
 console.log('   b) Update Hermes:       Set baseUrl to http://127.0.0.1:' + config.port);
 console.log('   c) Restart Hermes:      Restart your Hermes gateway');
 console.log('   d) Test:                Send a message through Hermes\n');

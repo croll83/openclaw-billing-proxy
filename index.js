@@ -131,8 +131,13 @@ function startServer(config) {
     }
   });
 
-  process.on('SIGINT', () => process.exit(0));
-  process.on('SIGTERM', () => process.exit(0));
+  const shutdown = () => {
+    console.log('\n  Shutting down...');
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(1), 5000);
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 const config = loadConfig();

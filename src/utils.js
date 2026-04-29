@@ -1,26 +1,28 @@
 const fs = require('fs');
 
-async function debugDump(filename, content) {
+const DUMP_DIR = '/tmp/proxy-dumps';
+let _dumpDirReady = false;
+
+function ensureDumpDir() {
+  if (!_dumpDirReady) {
+    fs.mkdirSync(DUMP_DIR, { recursive: true });
+    _dumpDirReady = true;
+  }
+}
+
+function debugDump(filename, content) {
   if (process.env.DEBUG_DUMP === '1') {
     try {
-      await fs.promises.mkdir('/tmp/proxy-dumps', { recursive: true });
-      await fs.promises.writeFile(`/tmp/${filename}`, content);
+      ensureDumpDir();
+      fs.writeFileSync(`${DUMP_DIR}/${filename}`, content);
     } catch (e) {
       console.error(`[DEBUG DUMP ERROR] Failed to dump ${filename}: ${e.message}`);
     }
   }
 }
 
-async function debugDumpProxy(filename, content) {
-  if (process.env.DEBUG_DUMP === '1') {
-    try {
-      await fs.promises.mkdir('/tmp/proxy-dumps', { recursive: true });
-      await fs.promises.writeFile(`/tmp/proxy-dumps/${filename}`, content);
-    } catch (e) {
-      console.error(`[DEBUG DUMP ERROR] Failed to dump ${filename}: ${e.message}`);
-    }
-  }
-}
+// Alias — both call sites use the same dir now
+const debugDumpProxy = debugDump;
 
 function findThinkingBlockEnd(text, start) {
   let depth = 0;

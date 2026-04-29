@@ -88,8 +88,8 @@ function handleGeminiRequest(bodyStr, req, res, config, reqNum, ts) {
     const geminiReq = openaiToGeminiRequest(parsed, config);
     const geminiBody = JSON.stringify(geminiReq);
 
-    debugDump(`gemini-input-${reqNum}.json`, JSON.stringify(parsed, null, 2));
-    debugDump(`gemini-output-${reqNum}.json`, JSON.stringify(geminiReq, null, 2));
+    debugDump(`gemini-${reqNum}-raw-in.json`, JSON.stringify(parsed, null, 2));
+    debugDump(`gemini-${reqNum}-converted.json`, JSON.stringify(geminiReq, null, 2));
 
     const headers = {
       'Content-Type': 'application/json',
@@ -99,6 +99,13 @@ function handleGeminiRequest(bodyStr, req, res, config, reqNum, ts) {
       'X-Goog-Api-Client': 'gl-node/22.17.0',
       'Accept-Encoding': 'identity'
     };
+
+    debugDump(`gemini-${reqNum}-out.json`, JSON.stringify({
+      method: 'POST',
+      url: `https://${config.GEMINI_HOST}${config.GEMINI_PATH}`,
+      headers,
+      body: geminiReq
+    }, null, 2));
 
     const upstream = https.request({
       hostname: config.GEMINI_HOST, port: 443,
@@ -112,6 +119,7 @@ function handleGeminiRequest(bodyStr, req, res, config, reqNum, ts) {
         upRes.on('data', c => errChunks.push(c));
         upRes.on('end', () => {
           const errBody = Buffer.concat(errChunks).toString();
+          debugDump(`gemini-${reqNum}-err-${status}.json`, errBody);
           console.error(`[${ts}] #${reqNum} GEMINI ERR: ${errBody.substring(0, 500)}`);
           const errResp = useAnthropicFmt
             ? JSON.stringify({ type: 'error', error: { type: 'api_error', message: `Gemini API error (${status}): ${errBody.substring(0, 200)}` } })
