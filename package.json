@@ -2,9 +2,9 @@
   "name": "hermes-billing-proxy",
   "version": "1.0.0",
   "description": "Route Hermes API requests through Claude Code subscription billing",
-  "main": "proxy.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node proxy.js",
+    "start": "node index.js",
     "setup": "node setup.js",
     "troubleshoot": "node troubleshoot.js"
   },
