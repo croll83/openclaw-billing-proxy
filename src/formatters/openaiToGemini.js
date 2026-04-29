@@ -151,6 +151,8 @@ function openaiToGeminiRequest(parsed, config) {
     generationConfig.stopSequences = Array.isArray(parsed.stop) ? parsed.stop : [parsed.stop];
   }
 
+  // Filter out CC tool stubs — only pass through real Hermes tools
+  const CC_STUB_NAMES = new Set(['Glob', 'Grep', 'Agent', 'NotebookEdit', 'TodoRead']);
   let tools = undefined;
   if (Array.isArray(parsed.tools) && parsed.tools.length > 0) {
     const functionDeclarations = [];
@@ -167,6 +169,7 @@ function openaiToGeminiRequest(parsed, config) {
       } else {
         continue;
       }
+      if (CC_STUB_NAMES.has(name)) continue;
       parameters = sanitizeSchemaForGemini(JSON.parse(JSON.stringify(parameters)));
       functionDeclarations.push({ name, description, parameters });
     }
