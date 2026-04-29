@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 function sanitizeSchemaForGemini(schema) {
   if (!schema || typeof schema !== 'object') return schema;
   if (Array.isArray(schema)) return schema.map(sanitizeSchemaForGemini);
@@ -139,11 +141,12 @@ function openaiToGeminiRequest(parsed, config) {
     systemInstruction = { parts: [{ text: allSystemTexts.join('\n') }] };
   }
 
-  const generationConfig = {};
-  if (parsed.temperature !== undefined) generationConfig.temperature = parsed.temperature;
-  const maxTok = parsed.max_tokens || parsed.max_completion_tokens;
-  generationConfig.maxOutputTokens = maxTok ? Math.min(maxTok, 65536) : 8192;
-  if (parsed.top_p !== undefined) generationConfig.topP = parsed.top_p;
+  const generationConfig = {
+    temperature: parsed.temperature !== undefined ? parsed.temperature : 1,
+    topP: parsed.top_p !== undefined ? parsed.top_p : 0.95,
+    topK: 64,
+    thinkingConfig: { includeThoughts: true }
+  };
   if (parsed.stop) {
     generationConfig.stopSequences = Array.isArray(parsed.stop) ? parsed.stop : [parsed.stop];
   }
@@ -178,8 +181,7 @@ function openaiToGeminiRequest(parsed, config) {
   const geminiReq = {
     project: config.GEMINI_PROJECT,
     model,
-    userAgent: 'pi-coding-agent',
-    requestId: `pi-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    user_prompt_id: crypto.randomUUID(),
     request: {
       contents,
       generationConfig

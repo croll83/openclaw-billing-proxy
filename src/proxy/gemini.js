@@ -95,9 +95,10 @@ function handleGeminiRequest(bodyStr, req, res, config, reqNum, ts) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${accessToken}`,
       'Content-Length': Buffer.byteLength(geminiBody),
-      'User-Agent': 'google-cloud-sdk vscode_cloudshelleditor/0.1',
-      'X-Goog-Api-Client': 'gl-node/22.17.0',
-      'Accept-Encoding': 'identity'
+      'User-Agent': `GeminiCLI/0.40.0/${geminiReq.model} (linux; x64; terminal) google-api-nodejs-client/9.14.2 grpc-js/1.12.6 gax/4.4.1 gl-node/${process.versions.node}`,
+      'x-goog-api-client': `gl-node/${process.versions.node}`,
+      'Accept': '*/*',
+      'Accept-Encoding': 'gzip,deflate'
     };
 
     debugDump(`gemini-${reqNum}-out.json`, JSON.stringify({
