@@ -95,6 +95,10 @@ function reverseMap(text, config) {
   const { masked, masks } = maskThinkingBlocks(text);
   let r = masked;
   for (const [sanitized, original] of config.reverseMap) {
+    // First normalize: collapse any already-expanded originals back to sanitized
+    // This prevents hermes-secrets.env → hermes-hermes-secrets.env
+    r = r.replaceAll(original, sanitized);
+    // Then expand all sanitized → original
     r = r.replaceAll(sanitized, original);
   }
   return unmaskThinkingBlocks(r, masks);
