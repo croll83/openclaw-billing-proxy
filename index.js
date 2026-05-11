@@ -100,7 +100,8 @@ function startServer(config) {
     });
   });
 
-  server.listen(config.port, '127.0.0.1', () => {
+  const bindAddr = config.bindAddress || '0.0.0.0';
+  server.listen(config.port, bindAddr, () => {
     try {
       const oauth = getToken(config.credsPath);
       const h = ((oauth.expiresAt - Date.now()) / 3600000).toFixed(1);
@@ -124,7 +125,8 @@ function startServer(config) {
       console.log(`  CC tool stubs:     ${config.injectCCStubs ? config.CC_TOOL_STUBS.length : 'disabled'}`);
       console.log(`  System strip:      ${config.stripSystemConfig ? 'enabled' : 'disabled'}`);
       console.log(`  Credentials:       ${config.credsPath}`);
-      console.log(`\n  Ready. Point Hermes baseUrl to http://127.0.0.1:${config.port}`);
+      console.log(`  Bind address:      ${bindAddr}`);
+      console.log(`\n  Ready. Point Hermes baseUrl to http://${bindAddr}:${config.port}`);
       console.log(`  Gemini models (gemini-*) auto-routed to Cloud Code API\n`);
     } catch (e) {
       console.error(`  Started on port ${config.port} but credentials error: ${e.message}`);

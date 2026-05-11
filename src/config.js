@@ -114,6 +114,7 @@ function loadConfig() {
 
   return {
     port: config.port || port,
+    bindAddress: config.bindAddress || '0.0.0.0',
     credsPath,
     replacements: config.replacements || DEFAULT_REPLACEMENTS,
     reverseMap: config.reverseMap || DEFAULT_REVERSE_MAP,
