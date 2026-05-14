@@ -78,6 +78,15 @@ function processBody(bodyStr, config) {
       const mt = typeof parsed.max_tokens === "number" ? parsed.max_tokens : 8192;
       const budget = Math.max(1024, Math.min(mt - 4096, 32000));
       parsed.thinking = { type: "enabled", budget_tokens: budget };
+      // Anthropic API rejects thinking + non-default temperature/top_p/top_k.
+      // Callers (e.g. vision_tools.py) may pass temperature=0.1 without
+      // knowing this proxy will auto-enable thinking — strip incompatible
+      // sampling params here to avoid 400 errors.
+      if (parsed.temperature !== undefined && parsed.temperature !== 1) {
+        delete parsed.temperature;
+      }
+      if (parsed.top_p !== undefined) delete parsed.top_p;
+      if (parsed.top_k !== undefined) delete parsed.top_k;
     }
   }
 
