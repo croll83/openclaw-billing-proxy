@@ -4,11 +4,12 @@ Route Hermes API requests through your Claude Max/Pro subscription instead of Ex
 
 ## What This Does
 
-Sits between Hermes and the Anthropic API as a transparent HTTP proxy. Hermes sends requests to `http://localhost:18801`, and the proxy forwards them to `https://api.anthropic.com` with:
+Sits between Hermes and the Anthropic/Gemini APIs as a transparent HTTP proxy. Hermes sends requests to the proxy, which forwards them to upstream with:
 
 - Claude Code's billing identifier injected into the system prompt
-- Your Claude Code OAuth token replacing Hermes's auth
+- Your Claude Code OAuth token replacing Hermes's auth (auto-refreshed)
 - Hermes-specific keywords sanitized to avoid detection
+- Gemini requests auto-routed to Google Cloud Code API
 - Correct TLS fingerprint (Node.js HTTPS client)
 
 **Zero external dependencies. Linux only. Node.js 18+.**
@@ -16,7 +17,8 @@ Sits between Hermes and the Anthropic API as a transparent HTTP proxy. Hermes se
 ## How It Works
 
 ```
-Hermes (Python) --> HTTP localhost:18801 --> HTTPS Node.js proxy --> api.anthropic.com
+Hermes (Python) --> HTTP proxy:18801 --> HTTPS Node.js --> api.anthropic.com (Anthropic models)
+                                                      --> cloudcode-pa.googleapis.com (Gemini models)
 ```
 
 The proxy performs bidirectional request/response processing:
@@ -63,9 +65,9 @@ cd hermes-billing-proxy
 node setup.js
 
 # 3. Start the proxy
-node proxy.js
+node index.js
 
-# 4. Point Hermes baseUrl to http://127.0.0.1:18801
+# 4. Point Hermes ANTHROPIC_BASE_URL to the proxy address
 ```
 
 ## Configuration
@@ -117,31 +119,39 @@ If you find new keywords that trigger detection, add them to both `replacements`
 ## Running as a Service (systemd)
 
 ```bash
-sudo tee /etc/systemd/system/hermes-proxy.service << EOF
+cat > ~/.config/systemd/user/hermes-billing-proxy.service << EOF
 [Unit]
 Description=Hermes Billing Proxy
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-ExecStart=/usr/bin/node /home/jarvis/sviluppo/hermes-billing-proxy/proxy.js
-WorkingDirectory=/home/jarvis/sviluppo/hermes-billing-proxy
+Environment="DEBUG_DUMP=1"
+Type=simple
+ExecStart=$(which node) $(pwd)/index.js
+WorkingDirectory=$(pwd)
 Restart=always
-User=jarvis
+RestartSec=5
+TimeoutStopSec=10
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 EOF
 
-sudo systemctl enable hermes-proxy
-sudo systemctl start hermes-proxy
+systemctl --user daemon-reload
+systemctl --user enable hermes-billing-proxy
+systemctl --user start hermes-billing-proxy
 ```
 
 ## Token Refresh
 
-Claude Code's OAuth token expires every ~24 hours. The proxy reads the token fresh from disk on each request. To refresh:
+The proxy auto-refreshes the OAuth token:
 
-- Open Claude Code CLI briefly -- it auto-refreshes on startup
-- Or run: `claude -p "ping" --max-turns 1 --no-session-persistence`
+- **Proactive**: refreshes 5 minutes before expiry on the next request
+- **Reactive**: on 401 from upstream, refreshes and retries once transparently
+- Token is persisted to `~/.claude/.credentials.json` after refresh
+
+No manual intervention needed. The token refresh uses `platform.claude.com/v1/oauth/token`.
 
 ## Health Check
 
@@ -169,8 +179,10 @@ node troubleshoot.js
 - Normal if you have active Claude Code sessions sharing the rate bucket
 - Wait and retry
 
-**Token Expired**
-- Open Claude Code CLI briefly or run: `claude -p "ping" --max-turns 1 --no-session-persistence`
+**Token Expired / 401**
+- Should auto-recover via built-in refresh
+- If persistent, check `journalctl --user -u hermes-billing-proxy` for `[AUTH]` lines
+- Manual fallback: `claude -p "ping" --max-turns 1 --no-session-persistence`
 
 ## License
 
