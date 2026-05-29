@@ -2,6 +2,8 @@
 
 Route Hermes API requests through your Claude Max/Pro subscription instead of Extra Usage billing.
 
+**Tested models:** Claude Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5, Gemini 2.5 Pro/Flash
+
 ## What This Does
 
 Sits between Hermes and the Anthropic/Gemini APIs as a transparent HTTP proxy. Hermes sends requests to the proxy, which forwards them to upstream with:
@@ -10,6 +12,7 @@ Sits between Hermes and the Anthropic/Gemini APIs as a transparent HTTP proxy. H
 - Your Claude Code OAuth token replacing Hermes's auth (auto-refreshed)
 - Hermes-specific keywords sanitized to avoid detection
 - Gemini requests auto-routed to Google Cloud Code API
+- Model-aware beta headers (long-context betas only sent for Opus)
 - Correct TLS fingerprint (Node.js HTTPS client)
 
 **Zero external dependencies. Linux only. Node.js 18+.**

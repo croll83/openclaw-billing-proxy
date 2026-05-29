@@ -152,7 +152,9 @@ function openaiToGeminiRequest(parsed, config) {
   }
 
   // Filter out CC tool stubs — only pass through real Hermes tools
-  const CC_STUB_NAMES = new Set(['Glob', 'Grep', 'Agent', 'NotebookEdit', 'TodoRead']);
+  const CC_STUB_NAMES = new Set(
+    (config.CC_TOOL_STUBS || []).map(s => JSON.parse(s).name)
+  );
   let tools = undefined;
   if (Array.isArray(parsed.tools) && parsed.tools.length > 0) {
     const functionDeclarations = [];

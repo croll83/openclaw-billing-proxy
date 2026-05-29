@@ -117,6 +117,10 @@ async function handleAnthropicRequest(bodyStr, req, res, config, reqNum, ts) {
 
   let body = Buffer.from(bodyStr, 'utf8');
 
+  let requestModel = '';
+  try { requestModel = JSON.parse(bodyStr).model || ''; } catch (_) {}
+  const isOpus = requestModel.includes('opus');
+
   const buildHeaders = (token) => {
     const headers = {};
     for (const [key, value] of Object.entries(req.headers)) {
@@ -130,7 +134,10 @@ async function handleAnthropicRequest(bodyStr, req, res, config, reqNum, ts) {
     headers['accept-encoding'] = 'identity';
     const existingBeta = headers['anthropic-beta'] || '';
     const betas = existingBeta ? existingBeta.split(',').map(b => b.trim()) : [];
-    for (const b of config.requiredBetas) { if (!betas.includes(b)) betas.push(b); }
+    for (const b of config.requiredBetas) {
+      if (!isOpus && (config.opusOnlyBetas || []).includes(b)) continue;
+      if (!betas.includes(b)) betas.push(b);
+    }
     headers['anthropic-beta'] = betas.join(',');
     return headers;
   };
