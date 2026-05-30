@@ -4,7 +4,7 @@ const { getGeminiTokenSync, refreshGeminiToken } = require('../auth/geminiToken'
 const { debugDump } = require('../utils');
 
 function handleGeminiNativeRequest(bodyStr, req, res, config, reqNum, ts) {
-  const urlMatch = req.url.match(/\/models\/([^/:]+):(stream)?[gG]enerateContent/);
+  const urlMatch = req.url.match(/\/models\/(gemini[^/:]*):(stream)?[gG]enerateContent/);
   if (!urlMatch) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: { message: 'Invalid Gemini native path', code: 400 } }));

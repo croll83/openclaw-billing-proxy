@@ -85,7 +85,7 @@ function startServer(config) {
 
       debugDumpProxy(`${reqNum}-in.json`, JSON.stringify({ method: req.method, url: req.url, headers: req.headers, body: bodyStr }, null, 2));
 
-      if (req.url.match(/\/models\/[^/:]+:(stream)?[gG]enerateContent/)) {
+      if (req.url.match(/\/models\/gemini[^/:]*:(stream)?[gG]enerateContent/)) {
         handleGeminiNativeRequest(bodyStr, req, res, config, reqNum, ts);
         return;
       }
