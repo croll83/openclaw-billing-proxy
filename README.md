@@ -2,7 +2,7 @@
 
 Route Hermes API requests through your Claude Max/Pro subscription instead of Extra Usage billing.
 
-**Tested models:** Claude Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5, Gemini 2.5 Pro/Flash
+**Tested models:** Claude Fable 5, Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5, Gemini 2.5 Pro/Flash
 
 ## What This Does
 
