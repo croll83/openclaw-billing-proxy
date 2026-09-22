@@ -7,9 +7,10 @@ const UPSTREAM_HOST = 'api.anthropic.com';
 const GEMINI_HOST = 'cloudcode-pa.googleapis.com';
 const GEMINI_PATH = '/v1internal:streamGenerateContent?alt=sse';
 const GEMINI_PROJECT = 'engaged-fuze-66c0n';
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 
-const BILLING_BLOCK = '{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.156.8c7; cc_entrypoint=sdk-cli; cch=edf4c;"}';
+// Matches the existing deployed header; this release does not change wire identity.
+const BILLING_BLOCK = '{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.251.8c7; cc_entrypoint=sdk-cli; cch=edf4c;"}';
 
 const DEFAULT_REQUIRED_BETAS = [
   'claude-code-20250219',
@@ -65,46 +66,10 @@ const CC_TOOL_STUBS = [
   '{"name":"Write","description":"Write a file","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"]}}'
 ];
 
-const DEFAULT_REPLACEMENTS = [
-  ['~/.hermes/', '~/.config/app/'],
-  ['hermes_tools', 'code_tools'],
-  ['hermes_telegram', 'tg_channel'],
-  ['hermes-secrets.env', 'secrets.env'],
-  ['Plan mode for Hermes', 'Plan mode'],
-  ['hermes_cli', 'cli_module'],
-  ['from hermes', 'from app'],
-  ['Hermes', 'Assistant'],
-  ['HERMES_', 'APP_'],
-  ['HERMES', 'APP'],
-  ['hermes', 'assistant'],
-  ['OpenClaw', 'CLI'],
-  ['openclaw', 'cli'],
-  ['OPENCLAW', 'CLI'],
-  ['Telegram', 'Channel'],
-  ['telegram', 'channel'],
-  ['Discord', 'Forum'],
-  ['discord', 'forum'],
-  ['WhatsApp', 'IM'],
-  ['whatsapp', 'im'],
-  ['Mattermost', 'Workspace'],
-  ['mattermost', 'workspace'],
-  ['Slack', 'Channel'],
-  ['slack', 'channel'],
-  ['billing proxy', 'routing layer'],
-  ['billing-proxy', 'routing-layer']
-];
-
-const DEFAULT_REVERSE_MAP = [
-  ['~/.config/app/', '~/.hermes/'],
-  ['code_tools', 'hermes_tools'],
-  ['tg_channel', 'hermes_telegram'],
-  ['secrets.env', 'hermes-secrets.env'],
-  ['Plan mode', 'Plan mode for Hermes'],
-  ['cli_module', 'hermes_cli'],
-  ['from app', 'from hermes'],
-  ['routing layer', 'billing proxy'],
-  ['routing-layer', 'billing-proxy']
-];
+// Rewriting identifiers and paths is lossy. Keep legacy overrides opt-in only;
+// Anthropic responses are always forwarded byte-for-byte, without a reverse map.
+const DEFAULT_REPLACEMENTS = [];
+const DEFAULT_REVERSE_MAP = [];
 
 function loadConfig() {
   const args = process.argv.slice(2);
@@ -149,14 +114,19 @@ function loadConfig() {
   const geminiClientId = config.geminiClientId || null;
   const geminiClientSecret = config.geminiClientSecret || null;
   const requiredBetas = config.requiredBetas || DEFAULT_REQUIRED_BETAS;
+  const anthropicTimeoutMs = config.anthropicTimeoutMs ?? 180000;
+  if (!Number.isInteger(anthropicTimeoutMs) || anthropicTimeoutMs <= 0) {
+    throw new Error('anthropicTimeoutMs must be a positive integer');
+  }
 
   return {
+    anthropicTimeoutMs,
     port: config.port || port,
     bindAddress: config.bindAddress || '0.0.0.0',
     credsPath,
     replacements: config.replacements || DEFAULT_REPLACEMENTS,
     reverseMap: config.reverseMap || DEFAULT_REVERSE_MAP,
-    stripSystemConfig: config.stripSystemConfig !== false,
+    stripSystemConfig: config.stripSystemConfig === true,
     injectCCStubs: config.injectCCStubs !== false,
     geminiClientId,
     geminiClientSecret,

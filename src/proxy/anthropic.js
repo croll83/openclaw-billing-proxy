@@ -1,6 +1,7 @@
 const https = require('https');
-const { getToken, getValidToken, refreshToken } = require('../auth/anthropicToken');
-const { applyReplacements, reverseMap, debugDump, debugDumpProxy } = require('../utils');
+const { pipeline } = require('stream');
+const { getValidToken, refreshToken } = require('../auth/anthropicToken');
+const { applyReplacements, debugDump, debugDumpProxy } = require('../utils');
 
 function processBody(bodyStr, config) {
   let parsed;
@@ -42,51 +43,45 @@ function processBody(bodyStr, config) {
     for (const block of parsed.system) {
       const text = block.text || '';
       if (text.includes('# SOUL.md') || text.length > 2000) {
-        moveBlocks.push(text);
+        moveBlocks.push(block);
       } else {
         keepBlocks.push(block);
       }
     }
     if (moveBlocks.length > 0) {
-      const movedText = moveBlocks.join('\n\n');
       parsed.system = keepBlocks;
       if (!Array.isArray(parsed.messages)) parsed.messages = [];
       parsed.messages.unshift(
-        { role: 'user', content: '[CONTEXT]\n' + movedText },
+        { role: 'user', content: [{ type: 'text', text: '[CONTEXT]' }, ...moveBlocks] },
         { role: 'assistant', content: 'Understood.' }
       );
-      console.log(`[RELOCATE] Moved ${movedText.length} chars from system to messages`);
+      console.log(`[RELOCATE] Moved ${moveBlocks.length} system blocks, preserving cache markers`);
     }
   }
 
-  if (config.injectCCStubs) {
-    if (!Array.isArray(parsed.tools)) parsed.tools = [];
+  // Never invent tool access for requests whose caller supplied no tools.
+  // Tool-bearing requests retain compatibility stubs unless explicitly disabled.
+  if (config.injectCCStubs && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
     const existingNames = new Set(parsed.tools.map(t => t.name));
     const hasNativeCC = existingNames.has('Glob') || existingNames.has('Read') || existingNames.has('Edit');
     if (!hasNativeCC) {
       for (const stub of config.CC_TOOL_STUBS) {
-        parsed.tools.unshift(JSON.parse(stub));
+        const tool = JSON.parse(stub);
+        if (!existingNames.has(tool.name)) {
+          parsed.tools.unshift(tool);
+          existingNames.add(tool.name);
+        }
       }
     }
   }
 
   if (parsed.context_management && Array.isArray(parsed.context_management.edits)) {
-    const needsThinking = parsed.context_management.edits.some(
-      e => e && typeof e.type === "string" && e.type.startsWith("clear_thinking")
-    );
-    if (needsThinking && (!parsed.thinking || (parsed.thinking.type !== "enabled" && parsed.thinking.type !== "adaptive"))) {
-      const mt = typeof parsed.max_tokens === "number" ? parsed.max_tokens : 8192;
-      const budget = Math.max(1024, Math.min(mt - 4096, 32000));
-      parsed.thinking = { type: "enabled", budget_tokens: budget };
-      // Anthropic API rejects thinking + non-default temperature/top_p/top_k.
-      // Callers (e.g. vision_tools.py) may pass temperature=0.1 without
-      // knowing this proxy will auto-enable thinking — strip incompatible
-      // sampling params here to avoid 400 errors.
-      if (parsed.temperature !== undefined && parsed.temperature !== 1) {
-        delete parsed.temperature;
-      }
-      if (parsed.top_p !== undefined) delete parsed.top_p;
-      if (parsed.top_k !== undefined) delete parsed.top_k;
+    if (!['enabled', 'adaptive'].includes(parsed.thinking?.type)) {
+      // Hermes owns reasoning settings. Remove incompatible housekeeping edits
+      // instead of silently enabling potentially expensive/unsupported thinking.
+      parsed.context_management.edits = parsed.context_management.edits.filter(
+        edit => !(edit && typeof edit.type === 'string' && edit.type.startsWith('clear_thinking'))
+      );
     }
   }
 
@@ -100,133 +95,128 @@ function processBody(bodyStr, config) {
   return JSON.stringify(parsed);
 }
 
+// Connection-specific headers must not cross either side of the proxy.
+function forwardHeaders(source) {
+  const excluded = new Set(['host', 'connection', 'keep-alive', 'proxy-authenticate',
+    'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
+  for (const name of String(source.connection || '').split(',')) excluded.add(name.trim().toLowerCase());
+  return Object.fromEntries(Object.entries(source).filter(([key]) => !excluded.has(key.toLowerCase())));
+}
+
 async function handleAnthropicRequest(bodyStr, req, res, config, reqNum, ts) {
+  let upstream;
+  let upstreamResponse;
+  let stopped = false;
+  const cancel = () => {
+    stopped = true;
+    upstreamResponse?.destroy();
+    upstream?.destroy();
+  };
+  const onClose = () => {
+    if (!res.writableFinished && !stopped) {
+      console.log(`[${ts}] #${reqNum} CANCEL downstream closed; aborting upstream`);
+      cancel();
+    }
+    cleanup();
+  };
+  const cleanup = () => {
+    req.removeListener('aborted', cancel);
+    res.removeListener('close', onClose);
+    res.removeListener('finish', cleanup);
+  };
+  const fail = (status, message) => {
+    if (stopped || res.destroyed || res.writableEnded) return;
+    if (res.headersSent) res.destroy();
+    else {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ type: 'error', error: { message } }));
+    }
+    cancel();
+  };
+  req.once('aborted', cancel);
+  res.once('close', onClose);
+  res.once('finish', cleanup);
+  if (req.aborted || res.destroyed) { cancel(); cleanup(); return; }
+
   let oauth;
-  try { oauth = await getValidToken(config.credsPath); } catch (e) {
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ type: 'error', error: { message: e.message } }));
-    return;
-  }
+  try { oauth = await getValidToken(config.credsPath); }
+  catch (error) { fail(500, error.message); return; }
+  if (stopped) return;
 
-  const originalSize = bodyStr.length;
-  const _rawCopy = bodyStr;
-  bodyStr = processBody(bodyStr, config);
-
-  debugDump(`dbg-raw-${reqNum}.json`, _rawCopy);
+  const originalSize = Buffer.byteLength(bodyStr);
+  debugDump(`dbg-raw-${reqNum}.json`, bodyStr);
+  try { bodyStr = processBody(bodyStr, config); }
+  catch (error) { fail(400, error.message); return; }
   debugDump(`dbg-proc-${reqNum}.json`, bodyStr);
-
-  let body = Buffer.from(bodyStr, 'utf8');
-
+  const body = Buffer.from(bodyStr, 'utf8');
   let requestModel = '';
   try { requestModel = JSON.parse(bodyStr).model || ''; } catch (_) {}
   const isOpus = requestModel.includes('opus');
 
   const buildHeaders = (token) => {
-    const headers = {};
-    for (const [key, value] of Object.entries(req.headers)) {
-      const lk = key.toLowerCase();
-      if (lk === 'host' || lk === 'connection' || lk === 'authorization' ||
-          lk === 'x-api-key' || lk === 'content-length') continue;
-      headers[key] = value;
-    }
-    headers['authorization'] = `Bearer ${token}`;
+    const headers = forwardHeaders(req.headers);
+    delete headers.authorization;
+    delete headers['x-api-key'];
+    headers.authorization = `Bearer ${token}`;
     headers['content-length'] = body.length;
     headers['accept-encoding'] = 'identity';
     const existingBeta = headers['anthropic-beta'] || '';
     const betas = existingBeta ? existingBeta.split(',').map(b => b.trim()) : [];
-    for (const b of config.requiredBetas) {
-      if (!isOpus && (config.opusOnlyBetas || []).includes(b)) continue;
-      if (!betas.includes(b)) betas.push(b);
+    for (const beta of config.requiredBetas) {
+      if (!isOpus && (config.opusOnlyBetas || []).includes(beta)) continue;
+      if (!betas.includes(beta)) betas.push(beta);
     }
     headers['anthropic-beta'] = betas.join(',');
     return headers;
   };
 
   const sendUpstream = (token, isRetry) => {
+    if (stopped || res.destroyed) return;
     const headers = buildHeaders(token);
-
     if (!isRetry) {
       console.log(`[${ts}] #${reqNum} ANTHROPIC ${req.method} ${req.url} (${originalSize}b -> ${body.length}b)`);
       debugDumpProxy(`${reqNum}-out.json`, JSON.stringify({
-        method: req.method,
-        url: `https://${config.UPSTREAM_HOST}${req.url}`,
-        headers,
-        body: bodyStr
+        method: req.method, url: `https://${config.UPSTREAM_HOST}${req.url}`, headers, body: bodyStr
       }, null, 2));
     }
-
-    const upstream = https.request({
-      hostname: config.UPSTREAM_HOST, port: 443,
-      path: req.url, method: req.method, headers
-    }, (upRes) => {
+    upstream = https.request({ hostname: config.UPSTREAM_HOST, port: 443,
+      path: req.url, method: req.method, headers }, (upRes) => {
+      upstreamResponse = upRes;
+      if (stopped || res.destroyed) { upRes.destroy(); return; }
       const status = upRes.statusCode;
       console.log(`[${ts}] #${reqNum} > ${status}${isRetry ? ' (retry)' : ''}`);
-
       if (status === 401 && !isRetry) {
-        // Drain response, refresh token, retry once
-        upRes.on('data', () => {});
-        upRes.on('end', () => {
-          console.log(`[${ts}] #${reqNum} 401 — refreshing token and retrying...`);
-          refreshToken(config.credsPath)
-            .then(newOauth => sendUpstream(newOauth.accessToken, true))
-            .catch(e => {
-              console.error(`[${ts}] #${reqNum} Token refresh failed: ${e.message}`);
-              res.writeHead(401, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ type: 'error', error: { message: 'Token refresh failed: ' + e.message } }));
-            });
+        upRes.once('error', () => fail(502, 'Authentication response interrupted'));
+        upRes.once('aborted', () => fail(502, 'Authentication response aborted'));
+        upRes.once('end', async () => {
+          if (stopped) return;
+          try {
+            const refreshed = await refreshToken(config.credsPath, { rejectedToken: token });
+            sendUpstream(refreshed.accessToken, true);
+          } catch (error) { fail(401, 'Token refresh failed: ' + error.message); }
         });
+        upRes.resume();
         return;
       }
-
-      if (status !== 200 && status !== 201) {
-        const errChunks = [];
-        upRes.on('data', c => errChunks.push(c));
-        upRes.on('end', () => {
-          let errBody = Buffer.concat(errChunks).toString();
-          if (errBody.includes('extra usage')) {
-            console.error(`[${ts}] #${reqNum} DETECTION! Body: ${body.length}b`);
-          }
-          errBody = reverseMap(errBody, config);
-          const nh = { ...upRes.headers };
-          delete nh['transfer-encoding'];
-          delete nh['Transfer-Encoding'];
-          nh['content-length'] = Buffer.byteLength(errBody);
-          res.writeHead(status, nh);
-          res.end(errBody);
-        });
-        return;
-      }
-      if (upRes.headers['content-type'] && upRes.headers['content-type'].includes('text/event-stream')) {
-        res.writeHead(status, upRes.headers);
-        upRes.on('data', chunk => res.write(reverseMap(chunk.toString(), config)));
-        upRes.on('end', () => res.end());
-      } else {
-        const respChunks = [];
-        upRes.on('data', c => respChunks.push(c));
-        upRes.on('end', () => {
-          let respBody = Buffer.concat(respChunks).toString();
-          respBody = reverseMap(respBody, config);
-          const nh = { ...upRes.headers };
-          delete nh['transfer-encoding'];
-          delete nh['Transfer-Encoding'];
-          nh['content-length'] = Buffer.byteLength(respBody);
-          res.writeHead(status, nh);
-          res.end(respBody);
-        });
-      }
+      // Forward bytes unchanged, including signed thinking, tool JSON, errors and UTF-8.
+      // pipeline supplies backpressure and tears down both streams on truncation/error.
+      res.writeHead(status, forwardHeaders(upRes.headers));
+      pipeline(upRes, res, error => {
+        if (error && !stopped) {
+          console.error(`[${ts}] #${reqNum} Stream interrupted: ${error.code || 'stream_error'}`);
+          cancel();
+        }
+        cleanup();
+      });
     });
-    upstream.on('error', e => {
-      console.error(`[${ts}] #${reqNum} ERR: ${e.message}`);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ type: 'error', error: { message: e.message } }));
-      }
+    upstream.once('error', () => fail(502, 'Upstream connection failed'));
+    upstream.setTimeout(config.anthropicTimeoutMs ?? 180000, () => {
+      fail(504, 'Upstream read timeout');
     });
-    upstream.write(body);
-    upstream.end();
+    upstream.end(body);
   };
-
-  sendUpstream(oauth.accessToken, false);
+  try { sendUpstream(oauth.accessToken, false); }
+  catch (error) { fail(502, 'Upstream connection failed'); }
 }
 
-module.exports = { handleAnthropicRequest };
+module.exports = { handleAnthropicRequest, processBody, forwardHeaders };

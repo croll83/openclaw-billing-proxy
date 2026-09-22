@@ -1,7 +1,19 @@
 config.json
 node_modules/
+__pycache__/
 *.log
 *.bak
 *.bak.*
 *.dump
 *.pre-msg-fix
+
+# Local secrets and private diagnostic artifacts
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.credentials*.json
+oauth_creds.json
+proxy-dumps/
+*.private.*
