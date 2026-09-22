@@ -2,7 +2,7 @@
 
 Route Hermes API requests through your Claude Max/Pro subscription instead of Extra Usage billing.
 
-**Tested models:** Claude Fable 5, Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5, Gemini 2.5 Pro/Flash
+**Tested models:** Claude Opus 5.5 (`claude-opus-5-5`), Claude Fable 5, Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5, Gemini 2.5 Pro/Flash
 
 ## What This Does
 
@@ -20,6 +20,12 @@ Acceptance and subscription allowance remain account/model dependent. Validate w
 **Zero runtime dependencies. Linux only. Node.js 18+.**
 
 The Gemini routes are unchanged by the Anthropic 2.2.0 fixes.
+
+## Opus 5.5 compatibility
+
+Version 2.2.1 updates the fixed Claude Code billing version to `2.1.280`, the minimum accepted for `claude-opus-5-5`. Updating the installed Claude CLI alone does not update this proxy header. The model ID is forwarded unchanged; no model allowlist change is needed.
+
+Live checks passed for a basic answer, SSE streaming, and a two-turn temperature lookup with tool arguments/results. The existing synthetic `secrets.env` round-trip probe returned `stop_reason: refusal` on Opus 5.5; that probe is not counted as passing. These checks do not establish compatibility with every Hermes conversation or parameter combination.
 
 ## Requirements
 
