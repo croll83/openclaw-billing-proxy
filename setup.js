@@ -3,7 +3,7 @@
  * Setup script for Hermes Billing Proxy
  *
  * Auto-detects Claude Code credentials and Hermes installation,
- * generates config.json with keyword replacement rules.
+ * generates config.json with transparent Anthropic defaults.
  *
  * Usage: node setup.js
  */
@@ -111,40 +111,10 @@ if (hermesPath) {
   console.log('   Checked: ' + hermesPaths.join(', '));
 }
 
-// Step 3: Build replacement rules
-console.log('\n3. Generating keyword replacement rules...');
-
-const replacements = [
-  ['~/.hermes/', '~/.config/app/'],
-  ['hermes_tools', 'code_tools'],
-  ['hermes_telegram', 'tg_channel'],
-  ['hermes-secrets.env', 'secrets.env'],
-  ['Plan mode for Hermes', 'Plan mode'],
-  ['hermes_cli', 'cli_module'],
-  ['from hermes', 'from app'],
-  ['Hermes', 'Assistant'],
-  ['hermes', 'assistant'],
-  ['billing proxy', 'routing layer'],
-  ['billing-proxy', 'routing-layer']
-];
-
-const reverseMap = [
-  ['~/.config/app/', '~/.hermes/'],
-  ['code_tools', 'hermes_tools'],
-  ['tg_channel', 'hermes_telegram'],
-  ['secrets.env', 'hermes-secrets.env'],
-  ['Plan mode', 'Plan mode for Hermes'],
-  ['cli_module', 'hermes_cli'],
-  ['from app', 'from hermes'],
-  ['Assistant', 'Hermes'],
-  ['assistant', 'hermes'],
-  ['routing layer', 'billing proxy'],
-  ['routing-layer', 'billing-proxy']
-];
-
-for (const [find, replace] of replacements) {
-  console.log('   ' + find + ' -> ' + replace);
-}
+// Step 3: Preserve caller context and tool arguments.
+console.log('\n3. Using transparent Anthropic defaults (no keyword replacements)...');
+const replacements = [];
+const reverseMap = [];
 
 // Step 4: Generate config
 console.log('\n4. Generating configuration...');
@@ -154,8 +124,9 @@ const config = {
   credentialsPath: credsPath,
   replacements: replacements,
   reverseMap: reverseMap,
-  stripSystemConfig: true,
-  injectCCStubs: true
+  stripSystemConfig: false,
+  injectCCStubs: true,
+  anthropicTimeoutMs: 180000
 };
 
 const configPath = path.join(process.cwd(), 'config.json');
@@ -175,5 +146,5 @@ console.log('   d) Test:                Send a message through Hermes\n');
 
 console.log('   Troubleshooting:');
 console.log('   - If requests fail with "extra usage" errors, check proxy console for 400 status codes');
-console.log('   - Add any new keyword patterns to both replacements and reverseMap in config.json');
-console.log('   - Token refreshes when you open Claude Code CLI -- do this every 24h\n');
+console.log('   - Validate changes with scripts/probe-anthropic.py before deploying');
+console.log('   - OAuth refresh is automatic; invalid_grant requires claude auth login\n');

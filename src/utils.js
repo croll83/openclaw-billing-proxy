@@ -21,8 +21,21 @@ function debugDump(filename, content) {
   }
 }
 
-// Alias — both call sites use the same dir now
-const debugDumpProxy = debugDump;
+// Transport dumps must never persist authentication headers.
+function debugDumpProxy(filename, content) {
+  if (process.env.DEBUG_DUMP !== '1') return;
+  try {
+    const data = JSON.parse(content);
+    for (const key of Object.keys(data.headers || {})) {
+      if (/^(authorization|proxy-authorization|x-api-key|cookie|set-cookie)$/i.test(key)) {
+        data.headers[key] = '[REDACTED]';
+      }
+    }
+    debugDump(filename, JSON.stringify(data, null, 2));
+  } catch (_) {
+    // Unknown dump shapes fail closed instead of falling back to secret-bearing text.
+  }
+}
 
 function findThinkingBlockEnd(text, start) {
   let depth = 0;

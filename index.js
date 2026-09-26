@@ -4,6 +4,7 @@ const fs = require('fs');
 const { loadConfig } = require('./src/config');
 const { handleAnthropicRequest } = require('./src/proxy/anthropic');
 const { handleGeminiRequest, getGeminiStats } = require('./src/proxy/gemini');
+const { handleGeminiNativeRequest } = require('./src/proxy/geminiNative');
 const { getToken } = require('./src/auth/anthropicToken');
 const { getGeminiTokenSync, getGeminiCredsPath } = require('./src/auth/geminiToken');
 const { debugDumpProxy } = require('./src/utils');
@@ -83,6 +84,11 @@ function startServer(config) {
       const ts = new Date().toISOString().substring(11, 19);
 
       debugDumpProxy(`${reqNum}-in.json`, JSON.stringify({ method: req.method, url: req.url, headers: req.headers, body: bodyStr }, null, 2));
+
+      if (req.url.match(/\/models\/gemini[^/:]*:(stream)?[gG]enerateContent/)) {
+        handleGeminiNativeRequest(bodyStr, req, res, config, reqNum, ts);
+        return;
+      }
 
       let isGemini = false;
       try {

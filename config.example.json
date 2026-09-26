@@ -1,9 +1,10 @@
 {
   "port": 18801,
   "credentialsPath": "~/.claude/.credentials.json",
-
-  "stripSystemConfig": true,
+  "stripSystemConfig": false,
   "injectCCStubs": true,
-
-  "_comment": "The replacements and reverseMap arrays below show the defaults. You only need config.json if you want to customize them."
+  "replacements": [],
+  "reverseMap": [],
+  "anthropicTimeoutMs": 180000,
+  "_comment": "Keep system/cache blocks. Compatibility stubs are retained only for requests that already have tools; responses are forwarded unchanged. Clear legacy replacement lists when upgrading."
 }
