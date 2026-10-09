@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
-      reference: ${{ steps.result.outputs.reference }}
+      digest: ${{ steps.result.outputs.digest }}
       tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -116,7 +116,7 @@ jobs:
         run: |
           digest=$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{json .Manifest.Digest}}' | tr -d '"')
           [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
-          echo "reference=$IMAGE:$TAG@$digest" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "Published: \`$IMAGE:$TAG@$digest\`" >> "$GITHUB_STEP_SUMMARY"
           echo 'Platform: linux/amd64. CRITICAL gate uses the repository scoped VEX assessment.' >> "$GITHUB_STEP_SUMMARY"
 
@@ -136,12 +136,15 @@ jobs:
       - name: Promote only the current master commit
         env:
           GH_TOKEN: ${{ github.token }}
-          REFERENCE: ${{ needs.publish.outputs.reference }}
+          TAG: ${{ needs.publish.outputs.tag }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
         run: |
           head=$(gh api "repos/$GITHUB_REPOSITORY/commits/master" --jq .sha)
           if [ "$head" != "$GITHUB_SHA" ]; then
             echo 'Master has advanced; immutable tag retained without changing latest.' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          REFERENCE="$IMAGE:$TAG@$DIGEST"
           docker buildx imagetools create --prefer-index=false --tag "$IMAGE:latest" "$REFERENCE"
           echo "Latest now references: \`$REFERENCE\`" >> "$GITHUB_STEP_SUMMARY"
