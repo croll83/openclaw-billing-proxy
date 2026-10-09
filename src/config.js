@@ -7,7 +7,7 @@ const UPSTREAM_HOST = 'api.anthropic.com';
 const GEMINI_HOST = 'cloudcode-pa.googleapis.com';
 const GEMINI_PATH = '/v1internal:streamGenerateContent?alt=sse';
 const GEMINI_PROJECT = 'engaged-fuze-66c0n';
-const VERSION = '2.2.1';
+const VERSION = require('../package.json').version;
 
 // Opus 5.5 requires Claude Code 2.1.280 or newer.
 const BILLING_BLOCK = '{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.280.8c7; cc_entrypoint=sdk-cli; cch=edf4c;"}';

@@ -12,7 +12,7 @@ function loginEnvironment(directory) {
   for (const key of ['PATH','HOME','USER','LOGNAME','TMPDIR','LANG','LC_ALL','HTTPS_PROXY','HTTP_PROXY','NO_PROXY','https_proxy','http_proxy','no_proxy','NODE_EXTRA_CA_CERTS']) {
     if (process.env[key]) env[key] = process.env[key];
   }
-  return { ...env, CLAUDE_CONFIG_DIR:directory, BROWSER:'/bin/true' };
+  return { ...env, CLAUDE_CONFIG_DIR:directory, BROWSER:'/bin/true', DISABLE_AUTOUPDATER:'1' };
 }
 class LoginManager {
   constructor(store, pool, monitor, { directory, command = 'claude', spawnProcess = spawn, timeoutMs = 600000 } = {}) {

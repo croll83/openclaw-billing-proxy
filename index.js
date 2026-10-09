@@ -111,7 +111,7 @@ function startServer(config) {
     try {
       const oauth = getToken(config.credsPath);
       const h = ((oauth.expiresAt - Date.now()) / 3600000).toFixed(1);
-      console.log(`\n  Hermes Billing Proxy v${config.VERSION}`);
+      console.log(`\n  AI Engine Proxy v${config.VERSION}`);
       console.log(`  ────────────────────────────────────`);
       console.log(`  Port:              ${config.port}`);
       console.log(`  Anthropic:         ${oauth.subscriptionType} (token expires ${h}h)`);
@@ -132,7 +132,7 @@ function startServer(config) {
       console.log(`  System strip:      ${config.stripSystemConfig ? 'enabled' : 'disabled'}`);
       console.log(`  Credentials:       ${config.credsPath}`);
       console.log(`  Bind address:      ${bindAddr}`);
-      console.log(`\n  Ready. Point Hermes baseUrl to http://${bindAddr}:${config.port}`);
+      console.log(`\n  Ready. Endpoint: http://${bindAddr}:${config.port}`);
       console.log(`  Gemini models (gemini-*) auto-routed to Cloud Code API\n`);
     } catch (e) {
       console.error(`  Started on port ${config.port} but credentials error: ${e.message}`);

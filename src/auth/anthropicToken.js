@@ -62,7 +62,7 @@ function refreshToken(credsPath, { rejectedToken } = {}) {
       client_id: OAUTH_CLIENT_ID
     });
 
-    console.log('[AUTH] Refreshing Anthropic OAuth token...');
+    console.log('[AUTH] Refreshing account token...');
 
     const req = https.request({
       hostname: OAUTH_TOKEN_URL, port: 443,

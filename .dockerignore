@@ -1,0 +1,22 @@
+# Allowlist: exclude private state and all development-only files by default.
+**
+!Dockerfile
+!.dockerignore
+!index.js
+!package.json
+!LICENSE
+!src/
+!src/**
+!web/
+!web/**
+# Explicit exclusions also apply beneath runtime directories.
+**/config.json
+**/data/
+**/.git/
+**/.claude*
+**/node_modules/
+**/.env*
+**/*.pem
+**/*.key
+**/.credentials*
+**/oauth_creds.json

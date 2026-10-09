@@ -1,0 +1,16 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "urn:uuid:ff4b952b-a69f-4b14-a4ef-6b8bf94e4887",
+  "author": "AI Engine Proxy image maintainers",
+  "timestamp": "2026-10-09T12:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {"name": "CVE-2023-45853"},
+      "products": [{"@id": "pkg:deb/debian/zlib1g@1.3.2-0ai1?epoch=1"}],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "This exact locally built package contains only libz from upstream zlib 1.3.2 (SHA256 bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16). MiniZip is not compiled or installed. CVE-2023-45853 affects MiniZip through zlib 1.3. Trivy's Debian bookworm source-package advisory has no fixed version, so it also flags this newer locally built binary package. References: https://security-tracker.debian.org/tracker/CVE-2023-45853 and https://github.com/madler/zlib/releases/tag/v1.3.2 . This statement does not apply to other package versions or MiniZip packages."
+    }
+  ]
+}
