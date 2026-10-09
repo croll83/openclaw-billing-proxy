@@ -126,7 +126,7 @@ const config = {
   reverseMap: reverseMap,
   stripSystemConfig: false,
   injectCCStubs: true,
-  anthropicTimeoutMs: 180000
+  anthropicTimeoutMs: 3600000
 };
 
 const configPath = path.join(process.cwd(), 'config.json');

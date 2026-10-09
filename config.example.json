@@ -5,6 +5,6 @@
   "injectCCStubs": true,
   "replacements": [],
   "reverseMap": [],
-  "anthropicTimeoutMs": 180000,
+  "anthropicTimeoutMs": 3600000,
   "_comment": "Keep system/cache blocks. Compatibility stubs are retained only for requests that already have tools; responses are forwarded unchanged. Clear legacy replacement lists when upgrading."
 }

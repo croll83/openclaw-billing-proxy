@@ -17,3 +17,8 @@ __pycache__/
 oauth_creds.json
 proxy-dumps/
 *.private.*
+
+# Management state (key hashes, account paths and reports)
+data/
+*.sqlite
+*.sqlite-*

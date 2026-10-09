@@ -104,7 +104,7 @@ function loadConfig() {
     }
   }
 
-  if (!credsPath) {
+  if (!credsPath && !config.management?.enabled) {
     console.error('[ERROR] Claude Code credentials not found. Run "claude auth login" first.');
     console.error('Searched:');
     for (const p of credsPaths) console.error('  ' + p);
@@ -114,12 +114,13 @@ function loadConfig() {
   const geminiClientId = config.geminiClientId || null;
   const geminiClientSecret = config.geminiClientSecret || null;
   const requiredBetas = config.requiredBetas || DEFAULT_REQUIRED_BETAS;
-  const anthropicTimeoutMs = config.anthropicTimeoutMs ?? 180000;
+  const anthropicTimeoutMs = config.anthropicTimeoutMs ?? 3600000;
   if (!Number.isInteger(anthropicTimeoutMs) || anthropicTimeoutMs <= 0) {
     throw new Error('anthropicTimeoutMs must be a positive integer');
   }
 
   return {
+    management: config.management || null,
     anthropicTimeoutMs,
     port: config.port || port,
     bindAddress: config.bindAddress || '0.0.0.0',

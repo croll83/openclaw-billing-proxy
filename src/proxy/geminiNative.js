@@ -1,9 +1,11 @@
+const { lifecycle } = require('./lifecycle');
 const https = require('https');
 const crypto = require('crypto');
 const { getGeminiTokenSync, refreshGeminiToken } = require('../auth/geminiToken');
 const { debugDump } = require('../utils');
 
 function handleGeminiNativeRequest(bodyStr, req, res, config, reqNum, ts) {
+  const life = lifecycle(req, res, config);
   const urlMatch = req.url.match(/\/models\/(gemini[^/:]*):(stream)?[gG]enerateContent/);
   if (!urlMatch) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -27,14 +29,16 @@ function handleGeminiNativeRequest(bodyStr, req, res, config, reqNum, ts) {
 
   let tokenInfo;
   try {
-    tokenInfo = getGeminiTokenSync();
+    tokenInfo = getGeminiTokenSync(config.geminiCredentialsPath);
   } catch (e) {
+    config.onUpstreamResponse?.(401, {});
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: { message: e.message, code: 500 } }));
     return;
   }
 
   const doRequest = (accessToken) => {
+    if (life.stopped) return;
     const cloudCodeBody = {
       project: config.GEMINI_PROJECT,
       model,
@@ -63,6 +67,8 @@ function handleGeminiNativeRequest(bodyStr, req, res, config, reqNum, ts) {
       method: 'POST',
       headers
     }, (upRes) => {
+      life.response(upRes);
+      if (life.stopped) return;
       const status = upRes.statusCode;
       console.log(`[${ts}] #${reqNum} GEMINI_NATIVE > ${status}`);
 
@@ -144,9 +150,10 @@ function handleGeminiNativeRequest(bodyStr, req, res, config, reqNum, ts) {
       }
     });
 
+    life.request(upstream);
     upstream.on('error', e => {
       console.error(`[${ts}] #${reqNum} GEMINI_NATIVE ERR: ${e.message}`);
-      if (!res.headersSent) {
+      if (!life.stopped && !res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: { message: 'Upstream error: ' + e.message, code: 502 } }));
       }
@@ -160,6 +167,8 @@ function handleGeminiNativeRequest(bodyStr, req, res, config, reqNum, ts) {
     refreshGeminiToken(tokenInfo.creds, tokenInfo.credsPath, config)
       .then(newToken => doRequest(newToken))
       .catch(e => {
+        if (life.stopped) return;
+        config.onUpstreamResponse?.(401, {});
         console.error(`[${ts}] #${reqNum} GEMINI_NATIVE refresh failed: ${e.message}`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: { message: 'Token refresh failed: ' + e.message, code: 500 } }));

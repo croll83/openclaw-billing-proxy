@@ -149,4 +149,20 @@ function startServer(config) {
 }
 
 const config = loadConfig();
-startServer(config);
+if (config.management?.enabled) {
+  const { createManagedServers } = require('./src/management/server');
+  const managed = createManagedServers(config);
+  managed.start().then(() => {
+    console.log('Managed proxy listening:', managed.inference.address());
+    console.log('Management console listening:', managed.admin.address());
+  }).catch(error => { console.error('Managed proxy startup failed:', error.message); process.exit(1); });
+  let shuttingDown = false;
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log('Draining active requests before shutdown');
+    managed.close().then(() => process.exit(0));
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+} else startServer(config);

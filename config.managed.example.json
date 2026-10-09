@@ -1,0 +1,23 @@
+{
+  "port": 18802,
+  "bindAddress": "127.0.0.1",
+  "stripSystemConfig": false,
+  "injectCCStubs": true,
+  "replacements": [],
+  "reverseMap": [],
+  "anthropicTimeoutMs": 3600000,
+  "geminiClientId": "YOUR_GOOGLE_OAUTH_CLIENT_ID",
+  "geminiClientSecret": "YOUR_GOOGLE_OAUTH_CLIENT_SECRET",
+  "management": {
+    "enabled": true,
+    "port": 18803,
+    "bindAddress": "127.0.0.1",
+    "databasePath": "data/proxy.sqlite",
+    "accountsDirectory": "data/accounts",
+    "claudeCommand": "claude",
+    "maxConcurrent": 32,
+    "stickyUsageThreshold": 95,
+    "maxPendingBodies": 64,
+    "maxBodyBytes": 16777216
+  }
+}

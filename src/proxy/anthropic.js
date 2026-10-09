@@ -1,5 +1,6 @@
 const https = require('https');
 const { pipeline } = require('stream');
+const { performance } = require('perf_hooks');
 const { getValidToken, refreshToken } = require('../auth/anthropicToken');
 const { applyReplacements, debugDump, debugDumpProxy } = require('../utils');
 
@@ -104,6 +105,8 @@ function forwardHeaders(source) {
 }
 
 async function handleAnthropicRequest(bodyStr, req, res, config, reqNum, ts) {
+  const startedAt = performance.now();
+  const idleTimeoutMs = config.anthropicTimeoutMs ?? 3600000;
   let upstream;
   let upstreamResponse;
   let stopped = false;
@@ -124,12 +127,12 @@ async function handleAnthropicRequest(bodyStr, req, res, config, reqNum, ts) {
     res.removeListener('close', onClose);
     res.removeListener('finish', cleanup);
   };
-  const fail = (status, message) => {
+  const fail = (status, message, details = {}) => {
     if (stopped || res.destroyed || res.writableEnded) return;
     if (res.headersSent) res.destroy();
     else {
       res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ type: 'error', error: { message } }));
+      res.end(JSON.stringify({ type: 'error', error: { message, ...details } }));
     }
     cancel();
   };
@@ -140,7 +143,7 @@ async function handleAnthropicRequest(bodyStr, req, res, config, reqNum, ts) {
 
   let oauth;
   try { oauth = await getValidToken(config.credsPath); }
-  catch (error) { fail(500, error.message); return; }
+  catch (error) { config.onUpstreamResponse?.(401, {}); fail(500, error.message); return; }
   if (stopped) return;
 
   const originalSize = Buffer.byteLength(bodyStr);
@@ -150,7 +153,12 @@ async function handleAnthropicRequest(bodyStr, req, res, config, reqNum, ts) {
   debugDump(`dbg-proc-${reqNum}.json`, bodyStr);
   const body = Buffer.from(bodyStr, 'utf8');
   let requestModel = '';
-  try { requestModel = JSON.parse(bodyStr).model || ''; } catch (_) {}
+  let streaming = false;
+  try {
+    const parsed = JSON.parse(bodyStr);
+    requestModel = parsed.model || '';
+    streaming = parsed.stream === true;
+  } catch (_) {}
   const isOpus = requestModel.includes('opus');
 
   const buildHeaders = (token) => {
@@ -172,6 +180,7 @@ async function handleAnthropicRequest(bodyStr, req, res, config, reqNum, ts) {
 
   const sendUpstream = (token, isRetry) => {
     if (stopped || res.destroyed) return;
+    let responseStarted = false;
     const headers = buildHeaders(token);
     if (!isRetry) {
       console.log(`[${ts}] #${reqNum} ANTHROPIC ${req.method} ${req.url} (${originalSize}b -> ${body.length}b)`);
@@ -181,6 +190,7 @@ async function handleAnthropicRequest(bodyStr, req, res, config, reqNum, ts) {
     }
     upstream = https.request({ hostname: config.UPSTREAM_HOST, port: 443,
       path: req.url, method: req.method, headers }, (upRes) => {
+      responseStarted = true;
       upstreamResponse = upRes;
       if (stopped || res.destroyed) { upRes.destroy(); return; }
       const status = upRes.statusCode;
@@ -193,11 +203,12 @@ async function handleAnthropicRequest(bodyStr, req, res, config, reqNum, ts) {
           try {
             const refreshed = await refreshToken(config.credsPath, { rejectedToken: token });
             sendUpstream(refreshed.accessToken, true);
-          } catch (error) { fail(401, 'Token refresh failed: ' + error.message); }
+          } catch (error) { config.onUpstreamResponse?.(401, {}); fail(401, 'Token refresh failed: ' + error.message); }
         });
         upRes.resume();
         return;
       }
+      config.onUpstreamResponse?.(status, upRes.headers);
       // Forward bytes unchanged, including signed thinking, tool JSON, errors and UTF-8.
       // pipeline supplies backpressure and tears down both streams on truncation/error.
       res.writeHead(status, forwardHeaders(upRes.headers));
@@ -210,8 +221,22 @@ async function handleAnthropicRequest(bodyStr, req, res, config, reqNum, ts) {
       });
     });
     upstream.once('error', () => fail(502, 'Upstream connection failed'));
-    upstream.setTimeout(config.anthropicTimeoutMs ?? 180000, () => {
-      fail(504, 'Upstream read timeout');
+    // Node's socket timeout resets on I/O; this is not a total request deadline.
+    // Keep pipeline untouched so SSE bytes flow immediately with backpressure.
+    upstream.setTimeout(idleTimeoutMs, () => {
+      if (stopped || res.destroyed || res.writableEnded) return;
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      const phase = responseStarted ? 'receiving_response' : 'waiting_for_response';
+      const details = { type: 'timeout_error', code: 'upstream_idle_timeout',
+        timeout_ms: idleTimeoutMs, elapsed_ms: elapsedMs, phase, streaming };
+      const message = `Upstream connection inactive for ${(idleTimeoutMs / 1000).toFixed(3)}s ` +
+        `(idle timeout; total elapsed ${(elapsedMs / 1000).toFixed(3)}s; ${phase}).` +
+        (streaming ? '' : ' Streaming is disabled: upstream may still be generating without sending data. ' +
+          'Enable streaming or increase anthropicTimeoutMs.');
+      // Once response headers are sent, HTTP status/body cannot be replaced safely.
+      // Always log the diagnosis, including for streams that must be terminated.
+      console.error(`[${ts}] #${reqNum} ${message} ${JSON.stringify(details)}`);
+      fail(504, message, details);
     });
     upstream.end(body);
   };

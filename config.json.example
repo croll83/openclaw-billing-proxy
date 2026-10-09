@@ -7,5 +7,5 @@
   "injectCCStubs": true,
   "geminiClientId": "YOUR_GOOGLE_OAUTH_CLIENT_ID",
   "geminiClientSecret": "YOUR_GOOGLE_OAUTH_CLIENT_SECRET",
-  "anthropicTimeoutMs": 180000
+  "anthropicTimeoutMs": 3600000
 }

@@ -48,7 +48,7 @@ function refreshToken(credsPath, { rejectedToken } = {}) {
     const oauth = creds.claudeAiOauth;
 
     if (!oauth?.refreshToken) {
-      return reject(new Error('No refresh token available'));
+      return reject(Object.assign(new Error('No refresh token available'), { code: 'LOGIN_REQUIRED' }));
     }
 
     // Re-check: another request might have refreshed already
@@ -75,7 +75,8 @@ function refreshToken(credsPath, { rejectedToken } = {}) {
         try {
           const resp = JSON.parse(Buffer.concat(chunks).toString());
           if (res.statusCode !== 200 || !resp.access_token) {
-            return reject(new Error(`Token refresh failed (${res.statusCode}): ${resp.error || 'unknown'}`));
+            return reject(Object.assign(new Error(`Token refresh failed (${res.statusCode})${resp.error === 'invalid_grant' ? ': invalid_grant' : ''}`),
+              resp.error === 'invalid_grant' ? { code: 'LOGIN_REQUIRED' } : {}));
           }
 
           if (!Number.isFinite(resp.expires_in) || resp.expires_in <= 0) {

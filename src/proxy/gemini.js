@@ -1,3 +1,4 @@
+const { lifecycle } = require('./lifecycle');
 const https = require('https');
 const { getGeminiTokenSync, refreshGeminiToken } = require('../auth/geminiToken');
 const { openaiToGeminiRequest, isAnthropicFormat, geminiSseParse } = require('../formatters/openaiToGemini');
@@ -13,7 +14,7 @@ const {
   buildAnthropicResponse,
   buildOpenaiResponse
 } = require('../formatters/sseBuilders');
-const { debugDump } = require('../utils');
+const { debugDump, debugDumpProxy } = require('../utils');
 
 const geminiStats = {
   requests: 0,
@@ -60,6 +61,7 @@ function trackGemini(model, status, usage, durationMs) {
 }
 
 function handleGeminiRequest(bodyStr, req, res, config, reqNum, ts) {
+  const life = lifecycle(req, res, config);
   let parsed;
   try {
     parsed = JSON.parse(bodyStr);
@@ -77,14 +79,16 @@ function handleGeminiRequest(bodyStr, req, res, config, reqNum, ts) {
 
   let tokenInfo;
   try {
-    tokenInfo = getGeminiTokenSync();
+    tokenInfo = getGeminiTokenSync(config.geminiCredentialsPath);
   } catch (e) {
+    config.onUpstreamResponse?.(401, {});
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ type: 'error', error: { message: e.message } }));
     return;
   }
 
   const doRequest = (accessToken) => {
+    if (life.stopped) return;
     const geminiReq = openaiToGeminiRequest(parsed, config);
     const geminiBody = JSON.stringify(geminiReq);
 
@@ -101,7 +105,7 @@ function handleGeminiRequest(bodyStr, req, res, config, reqNum, ts) {
       'Accept-Encoding': 'gzip,deflate'
     };
 
-    debugDump(`gemini-${reqNum}-out.json`, JSON.stringify({
+    debugDumpProxy(`gemini-${reqNum}-out.json`, JSON.stringify({
       method: 'POST',
       url: `https://${config.GEMINI_HOST}${config.GEMINI_PATH}`,
       headers,
@@ -112,6 +116,8 @@ function handleGeminiRequest(bodyStr, req, res, config, reqNum, ts) {
       hostname: config.GEMINI_HOST, port: 443,
       path: config.GEMINI_PATH, method: 'POST', headers
     }, (upRes) => {
+      life.response(upRes);
+      if (life.stopped) return;
       const status = upRes.statusCode;
       console.log(`[${ts}] #${reqNum} GEMINI > ${status}`);
 
@@ -301,9 +307,10 @@ function handleGeminiRequest(bodyStr, req, res, config, reqNum, ts) {
       }
     });
 
+    life.request(upstream);
     upstream.on('error', e => {
       console.error(`[${ts}] #${reqNum} GEMINI ERR: ${e.message}`);
-      if (!res.headersSent) {
+      if (!life.stopped && !res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ type: 'error', error: { message: 'Gemini upstream error: ' + e.message } }));
       }
@@ -317,6 +324,8 @@ function handleGeminiRequest(bodyStr, req, res, config, reqNum, ts) {
     refreshGeminiToken(tokenInfo.creds, tokenInfo.credsPath, config)
       .then(newToken => doRequest(newToken))
       .catch(e => {
+        if (life.stopped) return;
+        config.onUpstreamResponse?.(401, {});
         console.error(`[${ts}] #${reqNum} GEMINI refresh failed: ${e.message}`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ type: 'error', error: { message: 'Gemini token refresh failed: ' + e.message } }));

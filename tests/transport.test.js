@@ -8,7 +8,7 @@ async function fixture(t, handler, overrides = {}) {
   const origin = http.createServer(handler);
   origin.listen(0, '127.0.0.1');
   await once(origin, 'listening');
-  const state = { requests: 0, refreshes: [] };
+  const state = { requests: 0, refreshes: [], errors: [] };
   const auth = { getValidToken: async () => ({ accessToken: 'fixture-old' }),
     refreshToken: async (file, options) => {
       state.refreshes.push(options.rejectedToken);
@@ -19,7 +19,7 @@ async function fixture(t, handler, overrides = {}) {
       state.requests++;
       return http.request({ ...options, hostname: '127.0.0.1', port: origin.address().port }, callback);
     } }, '../auth/anthropicToken': auth,
-  });
+  }, '', { console: { log() {}, error(message) { state.errors.push(message); } } });
   const cfg = { ...config(), reverseMap: [['secrets.env', 'hermes-secrets.env'], ['Plan mode', 'Plan mode for Hermes']],
     UPSTREAM_HOST: 'unused.invalid', credsPath: '/fixture', ...overrides.config };
   const proxy = http.createServer((req, res) => {
@@ -37,7 +37,7 @@ async function fixture(t, handler, overrides = {}) {
   });
   const open = callback => {
     const req = http.request({ hostname: '127.0.0.1', port: proxy.address().port, method: 'POST', path: '/v1/messages' }, callback);
-    req.end(JSON.stringify({ model: 'claude-opus-5', max_tokens: 128, messages: [{ role: 'user', content: 'fixture' }] }));
+    req.end(JSON.stringify({ model: 'claude-opus-5', max_tokens: 128, messages: [{ role: 'user', content: 'fixture' }], ...overrides.body }));
     return req;
   };
   const read = () => new Promise((resolve, reject) => {
@@ -112,7 +112,18 @@ test('401 refresh is forced with rejected token and retries exactly once', async
 
 test('idle upstream times out instead of leaving client hanging', { timeout: 3000 }, async t => {
   const f = await fixture(t, () => {}, { config: { anthropicTimeoutMs: 30 } });
-  assert.equal((await f.read()).status, 504);
+  const result = await f.read();
+  assert.equal(result.status, 504);
+  const { error } = JSON.parse(result.body);
+  assert.equal(error.code, 'upstream_idle_timeout');
+  assert.equal(error.type, 'timeout_error');
+  assert.equal(error.timeout_ms, 30);
+  assert.ok(error.elapsed_ms >= 30);
+  assert.equal(error.phase, 'waiting_for_response');
+  assert.equal(error.streaming, false);
+  assert.match(error.message, /total elapsed [0-9.]+s/);
+  assert.match(error.message, /Streaming is disabled/);
+  assert.match(f.state.errors[0], /upstream_idle_timeout/);
 });
 
 test('disconnect while auth is pending cannot start a generation afterwards', { timeout: 3000 }, async t => {
@@ -130,3 +141,80 @@ test('disconnect while auth is pending cannot start a generation afterwards', { 
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(f.state.requests, 0);
 });
+
+for (const contentType of ['text/event-stream', 'application/json']) {
+  test(`active ${contentType} response can outlive the idle timeout`, { timeout: 5000 }, async t => {
+    const chunks = contentType === 'text/event-stream'
+      ? Array(9).fill('event: ping\ndata: {"type":"ping"}\n\n')
+      : ['{"text":"', ...Array(7).fill('more text '), '"}'];
+    const f = await fixture(t, (req, res) => {
+      res.writeHead(200, { 'content-type': contentType });
+      let i = 0;
+      res.write(chunks[i++]);
+      const timer = setInterval(() => {
+        res.write(chunks[i++]);
+        if (i === chunks.length) { clearInterval(timer); res.end(); }
+      }, 40);
+      res.once('close', () => clearInterval(timer));
+    }, { config: { anthropicTimeoutMs: 200 }, body: { stream: contentType === 'text/event-stream' } });
+    const result = await f.read();
+    assert.equal(result.status, 200);
+    assert.equal(result.body.toString(), chunks.join(''));
+    assert.equal(f.state.errors.length, 0);
+  });
+}
+
+test('SSE first chunk reaches the client before upstream can finish', { timeout: 3000 }, async t => {
+  let finish;
+  const first = 'event: ping\ndata: {"type":"ping"}\n\n';
+  const last = 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+  const f = await fixture(t, (req, res) => {
+    finish = () => res.end(last);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(first);
+  });
+  await new Promise((resolve, reject) => {
+    f.open(res => {
+      const chunks = [];
+      res.on('data', chunk => {
+        chunks.push(chunk);
+        if (chunks.length === 1) {
+          assert.equal(chunk.toString(), first);
+          finish(); // Upstream cannot finish until the client sees the first chunk.
+        }
+      });
+      res.on('error', reject);
+      res.on('end', () => {
+        assert.equal(Buffer.concat(chunks).toString(), first + last);
+        resolve();
+      });
+    }).on('error', reject);
+  });
+});
+
+test('idle timeout after SSE starts aborts without appending an error body and logs elapsed time',
+  { timeout: 3000 }, async t => {
+    const first = 'data: {"type":"ping"}\n\n';
+    const f = await fixture(t, (req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(first);
+    }, { config: { anthropicTimeoutMs: 60 }, body: { stream: true } });
+    await new Promise((resolve, reject) => {
+      f.open(res => {
+        const chunks = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () => reject(new Error('Truncated stream must not complete')));
+        res.on('error', () => {
+          assert.equal(res.statusCode, 200);
+          assert.equal(Buffer.concat(chunks).toString(), first);
+          resolve();
+        });
+      }).on('error', reject);
+    });
+    assert.equal(f.state.errors.length, 1);
+    assert.match(f.state.errors[0], /upstream_idle_timeout/);
+    assert.match(f.state.errors[0], /receiving_response/);
+    assert.match(f.state.errors[0], /"streaming":true/);
+    assert.doesNotMatch(f.state.errors[0], /Streaming is disabled/);
+    assert.match(f.state.errors[0], /total elapsed/);
+  });

@@ -3,14 +3,14 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 
-function load(relative, overrides = {}, extra = '') {
+function load(relative, overrides = {}, extra = '', globals = {}) {
   const filename = path.resolve(__dirname, '..', relative);
   const nativeRequire = createRequire(filename);
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8') + extra, {
     module, exports: module.exports,
     require: name => overrides[name] || nativeRequire(name),
-    console: { log() {}, error() {} }, Buffer, process, setTimeout, clearTimeout,
+    console: { log() {}, error() {} }, Buffer, process, setTimeout, clearTimeout, ...globals,
   }, { filename });
   return module.exports;
 }
