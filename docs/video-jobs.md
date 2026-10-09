@@ -1,6 +1,6 @@
 # Animated video jobs
 
-The opt-in extension creates **silent motion graphics**, such as product explainers, animated titles, diagrams and bars. A subscription-backed Claude call writes a constrained JSON storyboard; the local renderer rasterizes it with resvg and encodes an H.264 MP4 with FFmpeg. It does not generate realistic footage, voices, images or Claude Motion artifacts. This is a separate renderer built into this proxy, not an integration with Claude Motion's UI.
+The opt-in video extension creates **silent motion graphics**, such as product explainers, animated titles, diagrams and bars. A subscription-backed Claude call writes a constrained JSON storyboard; the local renderer rasterizes it with resvg and encodes an H.264 MP4 with FFmpeg. It does not generate realistic footage, voices, images or Claude Motion artifacts. The separately enabled [image worker](image-jobs.md) generates PNGs through a ChatGPT account. This is a separate renderer built into this proxy, not an integration with Claude Motion's UI.
 
 ## Enable
 

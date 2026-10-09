@@ -93,7 +93,7 @@ class Store {
     const item = { ...old, ...input };
     const name = label(item.name), app = label(item.app || name);
     const providers = item.providers ?? ['anthropic', 'gemini'];
-    if (!Array.isArray(providers) || !providers.length || providers.some(p => !['anthropic', 'gemini'].includes(p))) bad('Invalid API/provider permissions');
+    if (!Array.isArray(providers) || !providers.length || providers.some(p => !['anthropic', 'gemini', 'codex'].includes(p))) bad('Invalid API/provider permissions');
     const sourceIps = item.sourceIps ?? []; ipList(sourceIps);
     const maxConcurrent = integer(item.maxConcurrent, 4);
     if (item.enabled !== undefined && typeof item.enabled !== 'boolean') bad('enabled must be boolean');

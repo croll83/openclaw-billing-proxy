@@ -8,6 +8,18 @@
   "anthropicTimeoutMs": 3600000,
   "geminiClientId": "YOUR_GOOGLE_OAUTH_CLIENT_ID",
   "geminiClientSecret": "YOUR_GOOGLE_OAUTH_CLIENT_SECRET",
+  "images": {
+    "enabled": false,
+    "codexHome": "/data/codex-images",
+    "codexPath": "codex",
+    "directory": "data/images",
+    "maxConcurrent": 1,
+    "timeoutMs": 300000,
+    "retentionHours": 168,
+    "maxJobs": 1000,
+    "maxStorageBytes": 1073741824,
+    "maxOutputBytes": 20971520
+  },
   "video": {
     "enabled": false,
     "model": "claude-opus-5-5",

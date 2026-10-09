@@ -57,6 +57,15 @@ class Pool {
       (usage(preferred)>=this.stickyUsageThreshold && belowThreshold(account));
     // Busy slots, cooldowns, stale cloud data and reconnects use a temporary fallback.
     this.store.rememberAffinity(key.id,sourceHash,provider,permanent ? account.id : preferred.id);
+    return this.reserve(key,account);
+  }
+  // Trusted local workers (e.g. Codex) share global/caller limits without
+  // pretending their account is an Anthropic/Gemini credential file.
+  reserve(key,account) {
+    if (!this.accepting) throw new AdmissionError('Proxy is draining; retry later',503);
+    if (this.active>=this.limit) throw new AdmissionError('Proxy concurrency limit reached');
+    if ((this.byKey.get(key.id)||0)>=key.maxConcurrent) throw new AdmissionError('Caller concurrency limit reached');
+    if ((this.byAccount.get(account.id)||0)>=account.maxConcurrent) throw new AdmissionError('Worker account concurrency limit reached');
     this.active++;
     this.byKey.set(key.id,(this.byKey.get(key.id)||0)+1);
     this.byAccount.set(account.id,(this.byAccount.get(account.id)||0)+1);

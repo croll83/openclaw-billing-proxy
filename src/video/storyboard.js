@@ -1,8 +1,6 @@
 // Model output is data, never executable HTML, JavaScript, SVG or FFmpeg filters.
 const FORMATS = { landscape: [1280,720], portrait: [720,1280], square: [720,720] };
-class VideoError extends Error {
-  constructor(code, message, status = 400) { super(message); this.code = code; this.status = status; }
-}
+const {MediaError:VideoError}=require('../media/errors');
 function invalid(message) { throw new VideoError('invalid_input',message); }
 function object(value, allowed) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(k=>!allowed.includes(k))) invalid('Unexpected object fields');

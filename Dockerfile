@@ -13,6 +13,11 @@ WORKDIR /opt/renderer
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund && rm -rf /root/.npm
 
+FROM node:22-bookworm-slim AS image-cli
+ARG CODEX_VERSION=0.162.0-alpha.2
+RUN npm install --prefix /opt/image-cli --omit=dev --no-audit --no-fund \
+    "@openai/codex@${CODEX_VERSION}" && rm -rf /root/.npm
+
 # Build the maintained zlib release against bookworm, without adding a compiler
 # or packages from another Debian distribution to the runtime image.
 FROM node:22-bookworm-slim AS zlib
@@ -40,7 +45,9 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 COPY --from=zlib /tmp/zlib.deb /tmp/zlib.deb
 RUN dpkg -i /tmp/zlib.deb && rm /tmp/zlib.deb
 COPY --from=login-cli /opt/login-cli /opt/login-cli
+COPY --from=image-cli /opt/image-cli /opt/image-cli
 RUN ln -s /opt/login-cli/node_modules/.bin/claude /usr/local/bin/claude
+RUN ln -s /opt/image-cli/node_modules/.bin/codex /usr/local/bin/codex
 WORKDIR /app
 COPY index.js LICENSE ./
 COPY --from=login-cli /opt/application-package.json ./package.json

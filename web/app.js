@@ -14,6 +14,7 @@ function render(){
   $('#version').textContent='v'+state.version;
   $('#summary').replaceChildren();
   for(const [label,value] of [['Requests in flight',`${state.pool.active} / ${state.pool.limit}`],['Anthropic accounts',state.accounts.filter(a=>a.provider==='anthropic'&&a.enabled).length],['Gemini accounts',state.accounts.filter(a=>a.provider==='gemini'&&a.enabled).length],['Active API keys',state.keys.filter(k=>k.enabled).length]]){const c=node('div',undefined,'card');c.append(node('span',label),node('strong',value));$('#summary').append(c);}
+  for(const [name,worker] of [['Video jobs',state.video],['Image jobs',state.images]])if(worker){const c=node('div',undefined,'card');c.append(node('span',name),node('strong',`${worker.active} / ${worker.maxConcurrent}`));$('#summary').append(c);}
   $('#listeners').replaceChildren(...[['API',state.inference],['Console',state.console]].map(([label,a])=>node('span',`${label} · ${a?.address}:${a?.port}`)),node('span',`Sticky rotation · ${state.pool.stickyUsageThreshold ?? 95}%`),node('span',`Idle timeout · ${Math.round(state.idleTimeoutMs/60000)} min`),node('span',`Uptime · ${Math.floor(state.uptimeSeconds/60)} min`));
   $('#account-list').replaceChildren();
   for(const login of state.logins||[]){const c=node('article',undefined,'account');c.append(node('h3',login.name),node('p','Connection in progress · '+login.status.replaceAll('_',' '),'muted'),button('Resume login',()=>openLogin(login)));$('#account-list').append(c);}
@@ -55,7 +56,7 @@ function field(name,label,value,type='text'){const l=node('label',label);l.htmlF
 function edit(kind,item={}){
   editing={kind,id:item.id};$('#fields').replaceChildren();$('#form-error').textContent='';$('#edit-title').textContent=(item.id?'Edit ':'Create ')+(kind==='keys'?'API key':'account');
   field('name','Name',item.name).required=true;
-  if(kind==='keys'){field('app','Application',item.app).required=true;field('providers','Allowed APIs (anthropic, gemini)',(item.providers||['anthropic','gemini']).join(', '));field('sourceIps','Allowed source IPs / CIDRs (comma-separated; empty = any)',(item.sourceIps||[]).join(', '));}
+  if(kind==='keys'){field('app','Application',item.app).required=true;field('providers','Allowed services (anthropic, gemini, codex for images)',(item.providers||['anthropic','gemini']).join(', '));field('sourceIps','Allowed source IPs / CIDRs (comma-separated; empty = any)',(item.sourceIps||[]).join(', '));}
   else{const l=node('label','Provider');l.htmlFor='field-provider';const select=node('select');select.id='field-provider';select.name='provider';for(const provider of ['anthropic','gemini']){const o=node('option',provider);o.value=provider;select.append(o);}select.value=item.provider||'anthropic';$('#fields').append(l,select);field('credentialsPath','Absolute credential file path on proxy host',item.credentialsPath).required=true;field('project','Gemini cloud project (required for Gemini)',item.project);$('#fields').append(node('p','Register a separate OAuth credential file for each account. The console never displays token contents.','muted'));}
   field('maxConcurrent','Maximum concurrent requests',item.maxConcurrent||(kind==='keys'?4:2),'number');field('enabled','Enabled',item.enabled!==false,'checkbox');$('#editor').showModal();
 }

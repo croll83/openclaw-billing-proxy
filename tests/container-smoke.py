@@ -126,6 +126,8 @@ const plan={scenes:[{duration_seconds:1,background:'#102030',elements:[]}]};
 ''')
         cli = docker('exec', name, 'claude', '--version')
         assert cli.startswith('2.1.293 ')
+        codex_version = docker('exec', name, 'codex', '--version')
+        assert codex_version.endswith('0.162.0-alpha.2')
         docker('restart', name)
         info = json.loads(docker('inspect', name))[0]
         api = 'http://127.0.0.1:' + info['NetworkSettings']['Ports']['18802/tcp'][0]['HostPort']

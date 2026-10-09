@@ -1,4 +1,4 @@
-name: Test video extension
+name: Test media extensions
 on:
   pull_request:
   workflow_dispatch:
@@ -20,7 +20,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
           npm ci --no-audit --no-fund
-      - name: Transport, management and real video tests
+      - name: Transport, management, image worker and real video tests
         run: VIDEO_TEST_FFMPEG=/usr/bin/ffmpeg VIDEO_TEST_FONT=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf npm test
       - name: Build and verify read-only container
         run: |

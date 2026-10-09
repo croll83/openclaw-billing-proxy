@@ -21,11 +21,16 @@ Sits between Hermes and the Anthropic/Gemini APIs. On the Anthropic path it:
 
 Acceptance and subscription allowance remain account/model dependent. Validate with Extra Usage disabled if that is your account policy; an HTTP 200 alone does not prove a usable response.
 
-**Node.js 22.13+ (managed mode uses built-in SQLite). Video rendering uses the pinned `@resvg/resvg-js` native package and FFmpeg; the container includes both.**
+**Node.js 22.13+ (managed mode uses built-in SQLite). Media extensions require `npm ci`; video rendering uses pinned resvg plus FFmpeg, and image generation uses pinned Codex plus PNG validation. The container includes these dependencies.**
 
-## Animated video extension
+## Image and animated video extensions
 
-Managed mode can accept asynchronous video jobs: Claude Opus 5.5 writes a validated storyboard through the existing subscription transport; a local renderer produces a silent H.264 MP4 and PNG poster. Enable it explicitly with `video.enabled: true`. Existing message routes and account billing remain unchanged. See [configuration, limits and video job API](docs/video-jobs.md).
+Managed mode can accept asynchronous media jobs, with both extensions disabled by default:
+
+- **Images:** Codex native image generation through a separately signed-in ChatGPT account; returns a validated PNG. No Images API/API-key fallback. Enable `images.enabled` and explicitly grant the caller's `codex` permission. See [account setup, limits and image job API](docs/image-jobs.md).
+- **Animated videos:** Claude Opus 5.5 writes a validated storyboard through the existing subscription transport; a local renderer produces a silent H.264 MP4 and PNG poster. Enable `video.enabled`. See [configuration, limits and video job API](docs/video-jobs.md).
+
+Both use persistent idempotency, private downloads, bounded capacity/storage, cancellation and interrupted-restart recovery. Existing message responses, pools and default caller permissions remain unchanged. This creates media for a caller's preview/approval flow; it does not publish to social networks.
 
 The Gemini routes are unchanged by the Anthropic 2.2.0 fixes.
 
@@ -43,7 +48,7 @@ Live checks passed for a basic answer, SSE streaming, and a two-turn temperature
 
 ## Requirements
 
-- **Node.js** 18+
+- **Node.js** 22.13+
 - **Claude Max or Pro subscription**
 - **Claude Code CLI** installed and authenticated
 - **Hermes** running on the same machine
