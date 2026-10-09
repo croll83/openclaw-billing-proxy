@@ -1,0 +1,147 @@
+name: Publish container
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize retries of the same commit, without cancelling builds of other commits.
+concurrency:
+  group: container-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: docker.io/croll83/ai-engine-proxy
+  TRIVY_VERSION: 0.75.0
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      reference: ${{ steps.result.outputs.reference }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Compute immutable tag
+        id: meta
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          echo "tag=${version}-sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - name: Preserve existing release on rerun
+        id: existing
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:$TAG" > /tmp/manifest.txt 2>/tmp/manifest-error.txt; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+          elif grep -Eq 'not found|manifest unknown' /tmp/manifest-error.txt; then
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+          else
+            cat /tmp/manifest-error.txt >&2
+            exit 1
+          fi
+      - name: Unit and integration tests
+        run: npm test
+      - name: Build the artifact to test and publish
+        if: steps.existing.outputs.exists != 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          pull: true
+          tags: ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+          build-args: VERSION=${{ steps.meta.outputs.version }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify read-only container and nginx sidecar contract
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: python3 tests/container-smoke.py "$IMAGE:$TAG"
+      - name: Install pinned scanner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/trivy"
+          gh release download "v$TRIVY_VERSION" --repo aquasecurity/trivy \
+            --pattern "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            --pattern "trivy_${TRIVY_VERSION}_checksums.txt" --dir "$RUNNER_TEMP/trivy"
+          cd "$RUNNER_TEMP/trivy"
+          sha256sum --check --ignore-missing "trivy_${TRIVY_VERSION}_checksums.txt"
+          tar -xzf "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" trivy
+      - name: Gate on applicable critical vulnerabilities
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          "$RUNNER_TEMP/trivy/trivy" image --scanners vuln --severity CRITICAL --exit-code 1 \
+            --vex security/container.openvex.json --format json --output trivy-critical.json "$IMAGE:$TAG"
+      - name: Save scan evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: critical-scan-${{ github.sha }}
+          path: trivy-critical.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Publish the tested artifact
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: docker push "$IMAGE:$TAG"
+      - name: Record registry reference
+        id: result
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          digest=$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "reference=$IMAGE:$TAG@$digest" >> "$GITHUB_OUTPUT"
+          echo "Published: \`$IMAGE:$TAG@$digest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Platform: linux/amd64. CRITICAL gate uses the repository scoped VEX assessment.' >> "$GITHUB_STEP_SUMMARY"
+
+  promote-latest:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: container-latest
+      cancel-in-progress: false
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Promote only the current master commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REFERENCE: ${{ needs.publish.outputs.reference }}
+        run: |
+          head=$(gh api "repos/$GITHUB_REPOSITORY/commits/master" --jq .sha)
+          if [ "$head" != "$GITHUB_SHA" ]; then
+            echo 'Master has advanced; immutable tag retained without changing latest.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          docker buildx imagetools create --prefer-index=false --tag "$IMAGE:latest" "$REFERENCE"
+          echo "Latest now references: \`$REFERENCE\`" >> "$GITHUB_STEP_SUMMARY"

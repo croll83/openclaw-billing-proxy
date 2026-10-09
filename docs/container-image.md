@@ -82,3 +82,23 @@ by the documented build command. This is **neutral branding, not concealment**:
 recipients can inspect runtime JavaScript, UI, CLI binaries and required licenses
 to determine the implementation and purpose. No Docker packaging technique makes
 those files secret from someone who can pull the image.
+
+## Automatic GitHub publication
+
+`.github/workflows/publish-image.yml` runs on every push to `master` or manual
+workflow dispatch on that branch, using GitHub-hosted Ubuntu runners. Repository
+secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` authorize the Docker Hub push;
+no credentials are stored in Git or image layers.
+
+Each commit gets `docker.io/croll83/ai-engine-proxy:VERSION-sha-FULL_COMMIT_SHA`.
+The workflow runs Node 22 tests, builds and loads the amd64 image, tests the
+read-only container with the nginx sidecar, and applies the documented Trivy/VEX
+gate **before** pushing that same artifact. An existing commit tag is reused on
+reruns rather than overwritten, and is re-scanned. The registry digest is printed
+in the Actions run summary; scan evidence is retained as a workflow artifact.
+
+A separate serialized job updates `latest` only if that run's commit is still the
+head of `master`, preventing a slower old build from overwriting a newer release.
+Plain version tags such as `2.3.0` are manually released and never rewritten by
+this workflow. Changing the package version changes the prefix of future automatic
+tags. Do not use `latest` when an immutable deployment reference is required.
