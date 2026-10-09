@@ -4,6 +4,7 @@
 !.dockerignore
 !index.js
 !package.json
+!package-lock.json
 !LICENSE
 !src/
 !src/**

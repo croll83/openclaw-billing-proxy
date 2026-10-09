@@ -8,6 +8,11 @@ RUN npm install --prefix /opt/login-cli --omit=dev --no-audit --no-fund \
 COPY package.json /tmp/application-package.json
 RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('/tmp/application-package.json'));fs.writeFileSync('/opt/application-package.json',JSON.stringify({name:'ai-engine-proxy',version:p.version,private:true,main:p.main,engines:p.engines,license:p.license}));"
 
+FROM node:22-bookworm-slim AS renderer-dependencies
+WORKDIR /opt/renderer
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund && rm -rf /root/.npm
+
 # Build the maintained zlib release against bookworm, without adding a compiler
 # or packages from another Debian distribution to the runtime image.
 FROM node:22-bookworm-slim AS zlib
@@ -23,10 +28,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
     && dpkg-deb --build --root-owner-group /tmp/pkg /tmp/zlib.deb
 
 FROM node:22-bookworm-slim
-ARG VERSION=2.3.0
+ARG VERSION=2.4.0
 LABEL org.opencontainers.image.title="ai-engine-proxy" \
       org.opencontainers.image.version="${VERSION}"
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates ffmpeg fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 engine \
     && useradd --uid 10001 --gid 10001 --home-dir /data --no-create-home engine \
@@ -39,6 +44,7 @@ RUN ln -s /opt/login-cli/node_modules/.bin/claude /usr/local/bin/claude
 WORKDIR /app
 COPY index.js LICENSE ./
 COPY --from=login-cli /opt/application-package.json ./package.json
+COPY --from=renderer-dependencies /opt/renderer/node_modules ./node_modules/
 COPY src/ ./src/
 COPY web/ ./web/
 ENV HOME=/data \

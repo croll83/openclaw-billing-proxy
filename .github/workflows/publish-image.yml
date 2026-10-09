@@ -59,7 +59,11 @@ jobs:
             exit 1
           fi
       - name: Unit and integration tests
-        run: npm test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+          npm ci --no-audit --no-fund
+          VIDEO_TEST_FFMPEG=/usr/bin/ffmpeg VIDEO_TEST_FONT=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf npm test
       - name: Build the artifact to test and publish
         if: steps.existing.outputs.exists != 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6

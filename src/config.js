@@ -89,6 +89,9 @@ function loadConfig() {
   }
 
   const homeDir = os.homedir();
+  if (config.video?.enabled === true && !config.management?.enabled) {
+    throw new Error('video.enabled requires managed mode');
+  }
   const credsPaths = [
     config.credentialsPath,
     path.join(homeDir, '.claude', '.credentials.json'),
@@ -120,6 +123,7 @@ function loadConfig() {
   }
 
   return {
+    video: config.video || null,
     management: config.management || null,
     anthropicTimeoutMs,
     port: config.port || port,

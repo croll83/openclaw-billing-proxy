@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Container contract check. Requires Docker, Python 3 and a built image.
-Usage: python3 tests/container-smoke.py [ai-engine-proxy:2.3.0]
+Usage: python3 tests/container-smoke.py [ai-engine-proxy:2.4.0]
 Only the randomly named resources created by this script are removed.
 """
 import json
@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-image = sys.argv[1] if len(sys.argv) > 1 else 'ai-engine-proxy:2.3.0'
+image = sys.argv[1] if len(sys.argv) > 1 else 'ai-engine-proxy:2.4.0'
 name = 'engine-check-' + uuid.uuid4().hex[:12]
 volume, sidecar = name + '-data', name + '-nginx'
 
@@ -37,7 +37,8 @@ with tempfile.TemporaryDirectory(prefix='engine-container-') as directory:
     (directory / 'config.json').write_text(json.dumps({
         'port': 18802, 'bindAddress': '0.0.0.0',
         'management': {'enabled': True, 'port': 18803, 'bindAddress': '127.0.0.1',
-                       'databasePath': '/data/proxy.sqlite', 'accountsDirectory': '/data/accounts'}}))
+                       'databasePath': '/data/proxy.sqlite', 'accountsDirectory': '/data/accounts'},
+        'video': {'enabled': True}}))
     (directory / 'nginx.conf').write_text('''events {}
 http {
   map $http_origin $engine_origin { "" ""; default "http://127.0.0.1:18803"; }
@@ -110,10 +111,19 @@ http {
 const fs=require('fs');console.log(JSON.stringify({
  files:fs.readdirSync('/app').sort(),pkg:require('/app/package.json'),uid:process.getuid(),gid:process.getgid(),node:process.version
 }));'''))
-        assert runtime['files'] == ['LICENSE', 'index.js', 'package.json', 'src', 'web']
+        assert runtime['files'] == ['LICENSE', 'index.js', 'node_modules', 'package.json', 'src', 'web']
         assert runtime['pkg']['name'] == 'ai-engine-proxy'
         assert not any(k in runtime['pkg'] for k in ['description', 'keywords', 'repository'])
         assert runtime['uid'] == runtime['gid'] == 10001
+        # Exercise actual native rasterization and H.264 encoding inside the
+        # read-only container, without connecting any account or invoking a model.
+        docker('exec', name, 'node', '-e', '''
+const fs=require('fs');const {render,preflight}=require('/app/src/video/render');
+const dir='/data/container-video-check';fs.mkdirSync(dir,{mode:0o700});
+const options={ffmpegPath:'ffmpeg',fontFile:'/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',maxOutputBytes:52428800};
+const plan={scenes:[{duration_seconds:1,background:'#102030',elements:[]}]};
+(async()=>{await preflight(options);await render(plan,{format:'square',duration_seconds:1},dir,options,new AbortController().signal);fs.rmSync(dir,{recursive:true});})().catch(()=>process.exit(1));
+''')
         cli = docker('exec', name, 'claude', '--version')
         assert cli.startswith('2.1.293 ')
         docker('restart', name)

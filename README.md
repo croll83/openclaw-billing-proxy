@@ -21,7 +21,11 @@ Sits between Hermes and the Anthropic/Gemini APIs. On the Anthropic path it:
 
 Acceptance and subscription allowance remain account/model dependent. Validate with Extra Usage disabled if that is your account policy; an HTTP 200 alone does not prove a usable response.
 
-**Zero npm runtime dependencies. Linux only. Node.js 22.13+ (managed mode uses built-in SQLite).**
+**Node.js 22.13+ (managed mode uses built-in SQLite). Video rendering uses the pinned `@resvg/resvg-js` native package and FFmpeg; the container includes both.**
+
+## Animated video extension
+
+Managed mode can accept asynchronous video jobs: Claude Opus 5.5 writes a validated storyboard through the existing subscription transport; a local renderer produces a silent H.264 MP4 and PNG poster. Enable it explicitly with `video.enabled: true`. Existing message routes and account billing remain unchanged. See [configuration, limits and video job API](docs/video-jobs.md).
 
 The Gemini routes are unchanged by the Anthropic 2.2.0 fixes.
 

@@ -9,6 +9,8 @@ const { LoginManager } = require('./login');
 const { handleAnthropicRequest } = require('../proxy/anthropic');
 const { handleGeminiRequest } = require('../proxy/gemini');
 const { handleGeminiNativeRequest } = require('../proxy/geminiNative');
+const { VideoError } = require('../video/storyboard');
+const { videoHTTP } = require('../video/http');
 
 function json(res,status,value) {
   if (res.destroyed || res.writableEnded) return;
@@ -70,6 +72,8 @@ function createManagedServers(config, overrides = {}) {
   const maxPending = integer(options.maxPendingBodies,64);
   let pending = 0, counter = 0;
   const startedAt = Date.now();
+  const videos = config.video?.enabled === true ? new (require('../video/service').VideoService)(
+    config,store,pool,(body,req,res,scoped,_number,ts)=>(overrides.anthropic || handleAnthropicRequest)(body,req,res,scoped,++counter,ts),overrides.video) : null;
   const inference = http.createServer(async (req,res) => {
     try {
       if (req.method === 'GET' && req.url === '/health') { json(res,200,{status:pool.accepting ? 'ok' : 'draining'}); return; }
@@ -77,6 +81,21 @@ function createManagedServers(config, overrides = {}) {
       const rawKey = req.headers['x-api-key'] || bearer;
       let key = store.authenticate(rawKey,req.socket.remoteAddress);
       if (!key) { json(res,401,{error:{code:'invalid_api_key',message:'Missing, revoked or unauthorized API key'}}); req.resume(); return; }
+      const pathname=new URL(req.url,'http://proxy.invalid').pathname;
+      if (pathname==='/v1/video-jobs' || pathname.startsWith('/v1/video-jobs/')) {
+        if (!videos) { json(res,404,{error:{message:'Video extension is disabled'}});req.resume();return; }
+        if (!key.providers.includes('anthropic')) { json(res,403,{error:{message:'API key does not allow Anthropic'}});req.resume();return; }
+        if (req.method==='POST') {
+          if (!pool.accepting || pending>=maxPending) { json(res,503,{error:{message:'Proxy admission capacity reached'}});req.resume();return; }
+          pending++;
+          let body;
+          try { body=parseBody(await readBody(req,Math.min(maxBodyBytes,64*1024))); } finally { pending--; }
+          key=store.authenticate(rawKey,req.socket.remoteAddress);
+          if (!key || !key.providers.includes('anthropic')) { json(res,403,{error:{message:'API key access changed during upload'}});return; }
+          if (!res.destroyed)await videoHTTP(videos,req,res,key,body,json);
+        } else await videoHTTP(videos,req,res,key,null,json);
+        return;
+      }
       if (req.method !== 'POST') { json(res,405,{error:{message:'Use POST for inference'}}); req.resume(); return; }
       if (!pool.accepting || pending >= maxPending) { json(res,503,{error:{message:'Proxy admission capacity reached'}}); req.resume(); return; }
       pending++;
@@ -103,7 +122,7 @@ function createManagedServers(config, overrides = {}) {
       const handler = target.provider === 'anthropic' ? (overrides.anthropic || handleAnthropicRequest) :
         target.native ? (overrides.geminiNative || handleGeminiNativeRequest) : (overrides.gemini || handleGeminiRequest);
       await handler(bodyStr,req,res,scoped,++counter,new Date().toISOString().slice(11,19));
-    } catch (error) { json(res,error.status || 500,{error:{message:error.status ? error.message : 'Proxy request failed'}}); }
+    } catch (error) { json(res,error.status || 500,{error:{message:error.status ? error.message : 'Proxy request failed',...(error instanceof VideoError?{code:error.code}:{})}}); }
   });
   inference.requestTimeout = 120000; // Receiving request bodies, not generation duration.
   inference.headersTimeout = 30000;
@@ -129,7 +148,7 @@ function createManagedServers(config, overrides = {}) {
         json(res,200,{version:config.VERSION,uptimeSeconds:Math.floor((Date.now()-startedAt)/1000),
           inference:inference.address(),console:admin.address(),pool:pool.status(),pendingBodies:pending,
           idleTimeoutMs:config.anthropicTimeoutMs,requests:counter,accounts:store.accounts(),keys:store.keys(),
-          logins:logins.list(),last5Hours:store.report(5),last7Days:store.report(168)}); return;
+          logins:logins.list(),last5Hours:store.report(5),last7Days:store.report(168),...(videos?{video:videos.status()}:{})}); return;
       }
       const loginMatch = /^\/admin\/logins\/([a-f0-9-]+)(?:\/(code|verify))?$/.exec(pathname);
       if (req.method === 'GET' && loginMatch && !loginMatch[2]) { json(res,200,logins.public(logins.get(loginMatch[1]))); return; }
@@ -181,11 +200,12 @@ function createManagedServers(config, overrides = {}) {
     } catch (error) { json(res,error.status || 500,{error:{message:error.status ? error.message : 'Console operation failed'}}); }
   });
   admin.requestTimeout = 10000; admin.headersTimeout = 10000;
-  return { inference,admin,store,pool,monitor,logins,
+  return { inference,admin,store,pool,monitor,logins,videos,
     async start() {
       const listen = (server,port,host) => new Promise((resolve,reject) => {
         server.once('error',reject); server.listen(port,host,() => { server.removeListener('error',reject); resolve(); });
       });
+      await videos?.ready();
       await listen(admin,options.port ?? 18803,adminHost);
       try { await listen(inference,config.port,config.bindAddress || '127.0.0.1'); }
       catch (error) { admin.close(); throw error; }
@@ -193,6 +213,7 @@ function createManagedServers(config, overrides = {}) {
     },
     async close({ force = false } = {}) {
       pool.accepting = false;
+      await videos?.close();
       await Promise.all([inference,admin].map(server => new Promise(resolve => {
         server.close(resolve); if (force) server.closeAllConnections();
       })));

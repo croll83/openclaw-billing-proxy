@@ -1,8 +1,10 @@
 {
   "name": "hermes-billing-proxy",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Route Hermes API requests through Claude Code subscription billing",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "main": "index.js",
   "scripts": {
     "test": "node --test tests/*.test.js",
@@ -10,10 +12,19 @@
     "setup": "node setup.js",
     "troubleshoot": "node troubleshoot.js"
   },
-  "keywords": ["hermes", "proxy", "billing", "anthropic", "claude"],
+  "keywords": [
+    "hermes",
+    "proxy",
+    "billing",
+    "anthropic",
+    "claude"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/croll83/openclaw-billing-proxy"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "2.6.2"
   }
 }
