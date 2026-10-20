@@ -80,7 +80,7 @@ http {
         baseline = docker('diff', name)
         claude_version = docker('exec', name, 'claude', '--version')
         agy_version = docker('exec', name, 'agy', '--version')
-        assert os.environ.get('EXPECTED_CLAUDE_VERSION', '2.1.304') in claude_version
+        assert claude_version.startswith(os.environ.get('EXPECTED_CLAUDE_VERSION', '2.1.304') + ' ')
         assert agy_version == os.environ.get('EXPECTED_AGY_VERSION', '1.4.3')
         docker('exec', name, 'agy', '--help')  # Internal metadata commands are not listed in general help.
         print('CLI versions:', claude_version, 'AGY', agy_version)
@@ -125,8 +125,7 @@ const fs=require('fs');console.log(JSON.stringify({
         assert runtime['pkg']['name'] == 'ai-engine-proxy'
         assert not any(k in runtime['pkg'] for k in ['description', 'keywords', 'repository'])
         assert runtime['uid'] == runtime['gid'] == 10001
-        cli = docker('exec', name, 'claude', '--version')
-        assert cli.startswith('2.1.293 ')
+        cli = claude_version
         docker('restart', name)
         info = json.loads(docker('inspect', name))[0]
         api = 'http://127.0.0.1:' + info['NetworkSettings']['Ports']['18802/tcp'][0]['HostPort']
