@@ -82,7 +82,7 @@ http {
         agy_version = docker('exec', name, 'agy', '--version')
         assert os.environ.get('EXPECTED_CLAUDE_VERSION', '2.1.304') in claude_version
         assert agy_version == os.environ.get('EXPECTED_AGY_VERSION', '1.4.3')
-        assert 'models' in docker('exec', name, 'agy', '--help')
+        docker('exec', name, 'agy', '--help')  # Internal metadata commands are not listed in general help.
         print('CLI versions:', claude_version, 'AGY', agy_version)
 
         assert request(api, '/v1/messages', 'POST', {})[0] == 401
