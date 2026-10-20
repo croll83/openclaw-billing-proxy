@@ -32,6 +32,7 @@ function renewWithCLI(filename, config) {
   const home = filename.slice(0, -(PROFILE.length + 1));
   return new Promise((resolve, reject) => {
     const env = { PATH: process.env.PATH, HOME: home, LANG: 'C.UTF-8',
+      AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_CACHE_HOME: path.join(home, '.cache'),
       XDG_DATA_HOME: path.join(home, '.local', 'share') };
     const child = spawn(config.antigravityCommand || 'agy', ['models'], {

@@ -1,12 +1,26 @@
 # syntax=docker/dockerfile:1
 FROM node:22-bookworm-slim AS login-cli
-ARG CLAUDE_VERSION=2.1.293
+ARG CLAUDE_VERSION=2.1.304
 RUN npm install --prefix /opt/login-cli --omit=dev --no-audit --no-fund \
     "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
     && rm -rf /root/.npm
 
 COPY package.json /tmp/application-package.json
 RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('/tmp/application-package.json'));fs.writeFileSync('/opt/application-package.json',JSON.stringify({name:'ai-engine-proxy',version:p.version,private:true,main:p.main,engines:p.engines,license:p.license}));"
+
+# Official CLI release, pinned and checksum-verified for the published amd64 image.
+FROM node:22-bookworm-slim AS account-cli
+ARG AGY_VERSION=1.4.3
+ARG AGY_SHA256=319b2cb3240d244930bd077033b466941fd7ba6f0881d783eee801dbd2fb9371
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && test "$(dpkg --print-architecture)" = amd64 \
+    && curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/download/${AGY_VERSION}/agy_cli_linux_x64.tar.gz" -o /tmp/agy.tar.gz \
+    && echo "${AGY_SHA256}  /tmp/agy.tar.gz" | sha256sum -c - \
+    && mkdir -p /opt/account-cli \
+    && tar -xzf /tmp/agy.tar.gz -C /opt/account-cli \
+    && mv /opt/account-cli/antigravity /opt/account-cli/agy \
+    && chmod 0755 /opt/account-cli/agy \
+    && test "$(/opt/account-cli/agy --version)" = "${AGY_VERSION}"
 
 # Build the maintained zlib release against bookworm, without adding a compiler
 # or packages from another Debian distribution to the runtime image.
@@ -23,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
     && dpkg-deb --build --root-owner-group /tmp/pkg /tmp/zlib.deb
 
 FROM node:22-bookworm-slim
-ARG VERSION=2.4.0
+ARG VERSION=2.4.1
 LABEL org.opencontainers.image.title="ai-engine-proxy" \
       org.opencontainers.image.version="${VERSION}"
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates \
@@ -34,6 +48,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
     && mkdir -p /etc/ai-engine-proxy
 COPY --from=zlib /tmp/zlib.deb /tmp/zlib.deb
 RUN dpkg -i /tmp/zlib.deb && rm /tmp/zlib.deb
+COPY --from=account-cli /opt/account-cli/agy /usr/local/bin/agy
 COPY --from=login-cli /opt/login-cli /opt/login-cli
 RUN ln -s /opt/login-cli/node_modules/.bin/claude /usr/local/bin/claude
 WORKDIR /app
@@ -49,6 +64,7 @@ ENV HOME=/data \
     TMPDIR=/tmp \
     DEBUG_DUMP=0 \
     DISABLE_AUTOUPDATER=1 \
+    AGY_CLI_DISABLE_AUTO_UPDATE=true \
     NODE_OPTIONS=--require=/app/src/container-bootstrap.js
 USER 10001:10001
 WORKDIR /data

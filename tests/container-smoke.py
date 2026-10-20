@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Container contract check. Requires Docker, Python 3 and a built image.
-Usage: python3 tests/container-smoke.py [ai-engine-proxy:2.3.0]
+Usage: python3 tests/container-smoke.py [ai-engine-proxy:2.4.1]
 Only the randomly named resources created by this script are removed.
 """
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -13,7 +14,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-image = sys.argv[1] if len(sys.argv) > 1 else 'ai-engine-proxy:2.3.0'
+image = sys.argv[1] if len(sys.argv) > 1 else 'ai-engine-proxy:2.4.1'
 name = 'engine-check-' + uuid.uuid4().hex[:12]
 volume, sidecar = name + '-data', name + '-nginx'
 
@@ -77,6 +78,13 @@ http {
         else:
             raise AssertionError('Listeners did not become healthy')
         baseline = docker('diff', name)
+        claude_version = docker('exec', name, 'claude', '--version')
+        agy_version = docker('exec', name, 'agy', '--version')
+        assert os.environ.get('EXPECTED_CLAUDE_VERSION', '2.1.304') in claude_version
+        assert agy_version == os.environ.get('EXPECTED_AGY_VERSION', '1.4.3')
+        assert 'models' in docker('exec', name, 'agy', '--help')
+        print('CLI versions:', claude_version, 'AGY', agy_version)
+
         assert request(api, '/v1/messages', 'POST', {})[0] == 401
         origin = {'Origin': 'https://ai-engine-proxy.hercle.com'}
         assert request(console, '/admin/status', headers=origin)[0] == 200

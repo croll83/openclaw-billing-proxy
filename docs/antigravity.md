@@ -75,9 +75,12 @@ child after another two seconds if necessary. Discovery/usage requests have a
 60-minute inactivity timeout (`anthropicTimeoutMs`), not a total-duration cap.
 Disconnected callers cancel inference; generation is never automatically replayed.
 
-The current Dockerfile installs only the Claude login CLI. **Before using this
-backend in a container, add a pinned AGY binary for the target architecture and
-test renewal there.** No image or Dockerfile was changed for this host-based work.
+Since 2.4.1, the amd64 Docker image includes both login CLIs in PATH. AGY is
+downloaded from the official release with SHA-256 verification. CLI self-updates
+are disabled (`AGY_CLI_DISABLE_AUTO_UPDATE=true` is also set on renewal children);
+the daily publishing workflow builds fresh tested images instead. Account HOME
+and credential/cache paths must be under the writable `/data` volume. OAuth
+profiles remain external to the image. See `docs/container-updates.md`.
 
 ## Managed accounts and usage
 

@@ -4,6 +4,8 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * *"
 
 permissions:
   contents: read
@@ -37,13 +39,29 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Resolve current stable login CLIs
+        id: cli
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          claude=$(npm view @anthropic-ai/claude-code dist-tags.latest)
+          [[ "$claude" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh api repos/google-antigravity/antigravity-cli/releases/latest > "$RUNNER_TEMP/agy-release.json"
+          agy=$(jq -r '.tag_name' "$RUNNER_TEMP/agy-release.json")
+          [[ "$agy" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          digest=$(jq -r '.assets[] | select(.name == "agy_cli_linux_x64.tar.gz") | .digest' "$RUNNER_TEMP/agy-release.json")
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "claude=$claude" >> "$GITHUB_OUTPUT"
+          echo "agy=$agy" >> "$GITHUB_OUTPUT"
+          echo "agy_sha256=${digest#sha256:}" >> "$GITHUB_OUTPUT"
+          echo "Login CLIs: Claude $claude; AGY $agy (official checksum verified at build)." >> "$GITHUB_STEP_SUMMARY"
       - name: Compute immutable tag
         id: meta
         shell: bash
         run: |
           version=$(node -p "require('./package.json').version")
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
-          echo "tag=${version}-sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "tag=${version}-sha-${GITHUB_SHA}-run-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
       - name: Preserve existing release on rerun
         id: existing
@@ -69,7 +87,11 @@ jobs:
           load: true
           pull: true
           tags: ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
-          build-args: VERSION=${{ steps.meta.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            CLAUDE_VERSION=${{ steps.cli.outputs.claude }}
+            AGY_VERSION=${{ steps.cli.outputs.agy }}
+            AGY_SHA256=${{ steps.cli.outputs.agy_sha256 }}
           provenance: false
           sbom: false
           cache-from: type=gha
@@ -78,6 +100,8 @@ jobs:
         if: steps.existing.outputs.exists != 'true'
         env:
           TAG: ${{ steps.meta.outputs.tag }}
+          EXPECTED_CLAUDE_VERSION: ${{ steps.cli.outputs.claude }}
+          EXPECTED_AGY_VERSION: ${{ steps.cli.outputs.agy }}
         run: python3 tests/container-smoke.py "$IMAGE:$TAG"
       - name: Install pinned scanner
         env:
