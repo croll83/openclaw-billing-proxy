@@ -126,4 +126,10 @@ State is stored in `data/proxy.sqlite` with mode 0600, and the directory is crea
 
 Run `npm test` for offline regression/integration tests. Test servers use ephemeral loopback ports and synthetic credentials; they do not start or restart the production service.
 
-Concurrency is configurable per deployment, account and API key. The console suggests 16 for new Anthropic logins and 20 for Antigravity; these are operator choices, not advertised provider limits. Changing account labels or concurrency preserves cached cloud quota. Replacing credentials invalidates it.
+Concurrency is configurable per deployment, account and API key. The console suggests 64 for new Anthropic logins and 20 for Antigravity; these are operator choices, not advertised provider limits. Changing account labels or concurrency preserves cached cloud quota. Replacing credentials invalidates it.
+
+The default caller API-key concurrency is 64. Existing keys retain their configured limits.
+
+Google account cards display only explicit Google quota groups returned by the cloud summary, with separate window bars and reset times. They never sum or average per-model allowances. Google model details are collapsed by default; third-party Claude/GPT and internal models are omitted from the Google display. Raw quota data remains intact for admission. If group data is missing, the console says so instead of deriving a fictitious total. The model catalog already restricts Gemini discoveries to `gemini-*`; direct Anthropic recommendations remain available.
+
+Google documents shared Flash/Pro quota: https://antigravity.google/blog/changes-to-antigravity-plans/. On 2026-10-20 the live cloud summary additionally reports a distinct `gemini-argon-wtu-weekly` group. This is not evidence that Argon bypasses every shared or capacity limit.

@@ -127,7 +127,7 @@ function createManagedServers(config, overrides = {}) {
   });
   inference.requestTimeout = 120000; // Receiving request bodies, not generation duration.
   inference.headersTimeout = 30000;
-  const assets = { '/': ['index.html','text/html'], '/app.js': ['app.js','text/javascript'], '/style.css': ['style.css','text/css'] };
+  const assets = { '/': ['index.html','text/html'], '/app.js': ['app.js','text/javascript'], '/quota.js': ['quota.js','text/javascript'], '/style.css': ['style.css','text/css'] };
   const admin = http.createServer(async (req,res) => {
     try {
       // Host validation blocks DNS rebinding. No CORS; custom mutation header blocks cross-site forms.

@@ -98,7 +98,7 @@ class Store {
     const providers = item.providers ?? ['anthropic', 'gemini'];
     if (!Array.isArray(providers) || !providers.length || providers.some(p => !['anthropic', 'gemini'].includes(p))) bad('Invalid API/provider permissions');
     const sourceIps = item.sourceIps ?? []; ipList(sourceIps);
-    const maxConcurrent = integer(item.maxConcurrent, 4);
+    const maxConcurrent = integer(item.maxConcurrent, 64);
     if (item.enabled !== undefined && typeof item.enabled !== 'boolean') bad('enabled must be boolean');
     let secret;
     if (!id) {

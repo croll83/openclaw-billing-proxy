@@ -1,6 +1,7 @@
 'use strict';
 const $ = selector => document.querySelector(selector);
 let state, editing;
+const expandedQuotas=new Set();
 const node = (tag,text,cls) => { const e=document.createElement(tag); if(text!==undefined)e.textContent=text; if(cls)e.className=cls; return e; };
 const button = (text,fn,cls) => {const e=node('button',text,cls);e.type='button';e.onclick=async()=>{e.disabled=true;try{await fn();}catch(error){notice(error.message);}finally{e.disabled=false;}};return e;};
 function notice(message) { $('#notice').textContent=message;$('#notice').hidden=!message; }
@@ -32,11 +33,31 @@ function render(){
       c.append(node('p',(stale?'Stale / unavailable — excluded from routing. ':'Cloud quota · ')+time(a.quotaUpdatedAt),'muted'));
       if(a.quotaError)c.append(node('p',a.quotaError,'muted'));
     }else {
-      c.append(node('p',a.project?'Cloud project: '+a.project:'Cloud project discovered automatically','muted'));
-      for(const g of a.quota?.groups||[])for(const b of g.buckets||[])c.append(node('p',`${g.displayName} · ${b.displayName||b.window}: ${(b.remainingFraction*100).toFixed(1)}% remaining · resets ${time(b.resetTime)}`,'muted'));
-      const buckets=a.quota?.buckets||[];
-      for(const b of buckets)c.append(node('p',`${b.modelId}: ${(b.remainingFraction*100).toFixed(1)}% remaining · resets ${time(b.resetTime)}`,'muted'));
-      c.append(node('p',buckets.length?'Cloud quota updated '+time(a.quotaUpdatedAt):'Cloud quota unavailable. No 5-hour / 7-day windows or estimated percentages.','muted'));
+      const {groups,models}=googleQuota(a.quota||{});
+      const grid=node('div',undefined,'quota-groups');
+      for(const group of groups){
+        const tile=node('section',undefined,'quota-group');tile.append(node('h4',group.name));
+        for(const b of group.buckets){
+          const label=b.window==='5h'?'5 hours':b.window==='weekly'?'Weekly':b.displayName||b.window;
+          const row=node('div',undefined,'quota'),heading=node('div',undefined,'quota-label');
+          heading.append(node('span',label),node('b',`${(b.remainingFraction*100).toFixed(1)}% remaining`));
+          const progress=node('progress');progress.max=100;progress.value=b.remainingFraction*100;
+          progress.setAttribute('aria-label',group.name+' '+label+' remaining');
+          row.append(heading,progress,node('small','Resets '+time(b.resetTime)));tile.append(row);
+        }
+        grid.append(tile);
+      }
+      if(groups.length)c.append(grid,node('p','Cloud-reported quota groups. Model allowances are not additive.','muted'));
+      else c.append(node('p','Group quota unavailable. Expand model details for cloud-reported allowances.','muted'));
+      if(models.length){
+        const details=node('details',undefined,'quota-details');details.open=expandedQuotas.has(a.id);
+        details.ontoggle=()=>{if(!details.isConnected)return;if(details.open)expandedQuotas.add(a.id);else expandedQuotas.delete(a.id);};
+        details.append(node('summary',`Google model details (${models.length})`));
+        for(const b of models){const row=node('div',undefined,'model-quota');row.append(node('span',b.modelId),node('b',`${(b.remainingFraction*100).toFixed(1)}% remaining`),node('small','Resets '+time(b.resetTime)));details.append(row);}
+        c.append(details);
+      }
+      const stale=!a.quotaUpdatedAt || Date.now()-a.quotaUpdatedAt>300000;
+      c.append(node('p',(stale?'Stale / unavailable · ':'Cloud updated · ')+time(a.quotaUpdatedAt),'muted'));
       if(a.quotaError)c.append(node('p',a.quotaError,'muted'));
     }
     if(a.cooldownUntil>Date.now())c.append(node('p','Cooldown until '+time(a.cooldownUntil),'muted'));
@@ -63,7 +84,7 @@ function edit(kind,item={}){
   field('name','Name',item.name).required=true;
   if(kind==='keys'){field('app','Application',item.app).required=true;field('providers','Allowed APIs (anthropic, gemini)',(item.providers||['anthropic','gemini']).join(', '));field('sourceIps','Allowed source IPs / CIDRs (comma-separated; empty = any)',(item.sourceIps||[]).join(', '));}
   else{const l=node('label','Provider');l.htmlFor='field-provider';const select=node('select');select.id='field-provider';select.name='provider';for(const provider of ['anthropic','gemini']){const o=node('option',provider);o.value=provider;select.append(o);}select.value=item.provider||'anthropic';$('#fields').append(l,select);field('credentialsPath','Absolute credential file path on proxy host',item.credentialsPath).required=true;field('project','Cloud project (legacy Gemini only; leave empty for Antigravity)',item.project);$('#fields').append(node('p','Register a separate OAuth profile for each account. Antigravity uses the Gemini provider and requires geminiBackend=antigravity on the proxy. The console never displays token contents.','muted'));}
-  field('maxConcurrent','Maximum concurrent requests',item.maxConcurrent||(kind==='keys'?4:2),'number');field('enabled','Enabled',item.enabled!==false,'checkbox');$('#editor').showModal();
+  field('maxConcurrent','Maximum concurrent requests',item.maxConcurrent||(kind==='keys'?64:2),'number');field('enabled','Enabled',item.enabled!==false,'checkbox');$('#editor').showModal();
 }
 $('#edit-form').onsubmit=async event=>{event.preventDefault();const f=new FormData(event.target),body=Object.fromEntries(f);body.enabled=f.has('enabled');body.maxConcurrent=Number(body.maxConcurrent);if(editing.kind==='keys')for(const name of ['providers','sourceIps'])body[name]=body[name].split(',').map(s=>s.trim()).filter(Boolean);const save=event.submitter;save.disabled=true;try{const value=await api('/admin/'+editing.kind+(editing.id?'/'+editing.id:''),editing.id?'PATCH':'POST',body);$('#editor').close();if(value.secret)showSecret(value.secret);await refresh();}catch(error){$('#form-error').textContent=error.message;}finally{save.disabled=false;}};
 function showSecret(secret){$('#secret').value=secret;$('#secret-dialog').showModal();}
@@ -77,7 +98,7 @@ async function history(account) {
   const samples=await api('/admin/accounts/'+account.id+'/usage');$('#history-list').replaceChildren();
   for(const s of samples){const row=node('tr');let summary;
     if(account.provider==='anthropic')summary=`5h: ${s.quota.five_hour?.utilization??'—'}% · 7d: ${s.quota.seven_day?.utilization??'—'}%`;
-    else summary=(s.quota.buckets||[]).map(b=>`${b.modelId}: ${(b.remainingFraction*100).toFixed(1)}% remaining`).join('; ');
+    else {const view=googleQuota(s.quota);summary=view.groups.length?view.groups.map(g=>g.name+': '+g.buckets.map(b=>`${b.window} ${(b.remainingFraction*100).toFixed(1)}% remaining`).join(', ')).join('; '):'Group quota unavailable';}
     row.append(node('td',time(s.at)),node('td',summary));$('#history-list').append(row);
   }
   $('#history-dialog').showModal();
@@ -92,7 +113,7 @@ function openLogin(session=null,provider='anthropic'){
   clearTimeout(loginTimer);loginSession=session;
   $('#login-error').textContent='';$('#login-code').value='';
   $('#login-start').hidden=!!session;$('#login-progress').hidden=!session;
-  if(!session){$('#login-name').value='';$('#login-concurrency').value=loginProvider==='gemini'?20:16;}
+  if(!session){$('#login-name').value='';$('#login-concurrency').value=loginProvider==='gemini'?20:64;}
   if(!$('#login-dialog').open)$('#login-dialog').showModal();
   if(session){renderLogin(session);scheduleLoginPoll();}
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Container contract check. Requires Docker, Python 3 and a built image.
-Usage: python3 tests/container-smoke.py [ai-engine-proxy:2.5.0]
+Usage: python3 tests/container-smoke.py [ai-engine-proxy:2.5.1]
 Only the randomly named resources created by this script are removed.
 """
 import json
@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-image = sys.argv[1] if len(sys.argv) > 1 else 'ai-engine-proxy:2.5.0'
+image = sys.argv[1] if len(sys.argv) > 1 else 'ai-engine-proxy:2.5.1'
 name = 'engine-check-' + uuid.uuid4().hex[:12]
 volume, sidecar = name + '-data', name + '-nginx'
 
@@ -88,6 +88,7 @@ http {
         assert request(api, '/v1/messages', 'POST', {})[0] == 401
         origin = {'Origin': 'https://ai-engine-proxy.hercle.com'}
         assert request(console, '/admin/status', headers=origin)[0] == 200
+        assert request(console, '/quota.js')[0] == 200
         headers = {**origin, 'x-proxy-admin': '1'}
         status, body = request(console, '/admin/keys', 'POST', {'name': 'Container check'}, headers)
         assert status == 201
