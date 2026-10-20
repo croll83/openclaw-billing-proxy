@@ -61,6 +61,11 @@ function trackGemini(model, status, usage, durationMs) {
 }
 
 function handleGeminiRequest(bodyStr, req, res, config, reqNum, ts) {
+  if (config.geminiBackend === 'antigravity') {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'Antigravity requires the Gemini-native generateContent API to preserve thought signatures and tool history' } }));
+    return;
+  }
   const life = lifecycle(req, res, config);
   let parsed;
   try {

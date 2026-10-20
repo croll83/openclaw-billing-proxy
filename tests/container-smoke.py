@@ -86,6 +86,9 @@ http {
         key = json.loads(body)
         for auth in [{'x-api-key': key['secret']}, {'Authorization': 'Bearer ' + key['secret']}]:
             assert request(api, '/v1/unknown', 'POST', {'model': 'test'}, auth)[0] == 404
+        status, body = request(api, '/v1/models/latest?provider=anthropic&family=sonnet', headers={'x-api-key': key['secret']})
+        assert status == 200 and json.loads(body)['id'] == 'claude-sonnet-5-5'
+        assert request(api, '/v1/models')[0] == 401
         assert request(console, '/admin/keys/' + key['key']['id'], 'DELETE', headers=headers)[0] == 200
         status, body = request(console, '/admin/logins', 'POST', {'name': 'Container login check'}, headers)
         assert status == 201

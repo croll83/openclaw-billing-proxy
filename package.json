@@ -1,6 +1,6 @@
 {
   "name": "hermes-billing-proxy",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Route Hermes API requests through Claude Code subscription billing",
   "engines": { "node": ">=22.13.0" },
   "main": "index.js",

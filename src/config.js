@@ -104,7 +104,12 @@ function loadConfig() {
     }
   }
 
-  if (!credsPath && !config.management?.enabled) {
+  const geminiBackend = config.geminiBackend || 'cloudcode';
+  if (!['cloudcode', 'antigravity'].includes(geminiBackend)) throw new Error('Invalid geminiBackend');
+  if (config.antigravityUserAgent && (typeof config.antigravityUserAgent !== 'string' || /[\r\n]/.test(config.antigravityUserAgent))) {
+    throw new Error('Invalid antigravityUserAgent');
+  }
+  if (!credsPath && !config.management?.enabled && geminiBackend !== 'antigravity') {
     console.error('[ERROR] Claude Code credentials not found. Run "claude auth login" first.');
     console.error('Searched:');
     for (const p of credsPaths) console.error('  ' + p);
@@ -121,6 +126,10 @@ function loadConfig() {
 
   return {
     management: config.management || null,
+    geminiBackend,
+    geminiCredentialsPath: config.geminiCredentialsPath,
+    antigravityCommand: config.antigravityCommand,
+    antigravityUserAgent: config.antigravityUserAgent,
     anthropicTimeoutMs,
     port: config.port || port,
     bindAddress: config.bindAddress || '0.0.0.0',

@@ -258,3 +258,38 @@ test('HTTP automatic affinity ignores session and forwarded IP headers without r
   assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM account_affinity').get().n,1);
   quota(f.store,a.id,95);assert.equal((await request({})).status,200);assert.equal(seen[2].path,b.credentialsPath);
 });
+
+test('catalog authentication, scope, alias resolution, reporting and recommendation persistence',async t=>{
+  const seen=[];
+  const f=await servers(t,{handlers:{anthropic:(body,req,res)=>{seen.push(JSON.parse(body));res.end('{}');},geminiNative:(body,req,res)=>{seen.push({url:req.url,body:JSON.parse(body)});res.end('{}');}}});
+  const a=f.account();quota(f.store,a.id);f.account('gemini');
+  const both=f.store.saveKey({name:'both'}).secret;
+  const only=f.store.saveKey({name:'anthropic-only',providers:['anthropic']}).secret;
+  const headers={'x-api-key':both,'content-type':'application/json'};
+  assert.equal((await fetch(f.api+'/v1/models')).status,401);
+  let response=await fetch(f.api+'/v1/models',{headers:{'x-api-key':only}});
+  assert.ok((await response.json()).data.every(m=>m.provider==='anthropic'));
+  assert.equal((await fetch(f.api+'/v1/models?provider=gemini',{headers:{'x-api-key':only}})).status,403);
+  assert.equal((await fetch(f.api+'/v1/models/latest?provider=anthropic&family=unknown',{headers})).status,404);
+  response=await fetch(f.api+'/v1/models/latest?provider=anthropic&family=sonnet',{headers});
+  assert.equal((await response.json()).id,'claude-sonnet-5-5');
+  response=await fetch(f.api+'/v1/models/latest?provider=anthropic&family=fable',{headers});
+  assert.equal((await response.json()).id,'claude-fable-5-1');
+  response=await fetch(f.api+'/v1/messages',{method:'POST',headers,body:JSON.stringify({model:'sonnet-latest',messages:[],stream:true})});
+  assert.equal(response.status,200);await response.text();assert.equal(seen[0].model,'claude-sonnet-5-5');
+  assert.equal(f.store.modelReport(1)[0].requestedModel,'sonnet-latest');
+  assert.equal(f.store.modelReport(1)[0].model,'claude-sonnet-5-5');
+  response=await fetch(f.api+'/v1beta/models/argon-latest:streamGenerateContent?alt=sse',{method:'POST',headers:{'x-goog-api-key':both},body:JSON.stringify({contents:[],thoughtSignature:'keep'})});
+  assert.equal(response.status,200);await response.text();assert.equal(seen[1].url,'/v1beta/models/gemini-4-argon-medium:streamGenerateContent?alt=sse');assert.equal(seen[1].body.thoughtSignature,'keep');
+  assert.equal((await fetch(f.api+'/v1/messages',{method:'POST',headers,body:JSON.stringify({model:'google/sonnet-latest'})})).status,404);
+  assert.equal((await fetch(f.admin+'/admin/models',{method:'PUT',headers,body:JSON.stringify({provider:'anthropic',family:'sonnet',id:'claude-sonnet-test'})})).status,403);
+  response=await fetch(f.admin+'/admin/models',{method:'PUT',headers:{...headers,'x-proxy-admin':'1'},body:JSON.stringify({provider:'anthropic',family:'sonnet',id:'claude-sonnet-test'})});
+  assert.equal(response.status,200);
+  const {Catalog}=require('../src/management/catalog');const reopened=new Catalog(f.store);
+  assert.equal(reopened.latest('anthropic','sonnet',['anthropic']).id,'claude-sonnet-test');
+  assert.throws(()=>reopened.save({provider:'anthropic',family:'sonnet',id:'gemini-test'}));
+  assert.throws(()=>reopened.save({provider:'anthropic',family:'sonnet',id:'claude-sonnet-latest'}));
+  const g=f.store.accounts().find(a=>a.provider==='gemini');f.store.quota(g.id,{buckets:[{modelId:'gemini-new',remainingFraction:1}]});
+  assert.throws(()=>reopened.latest('gemini','argon',['gemini']),/absent/);
+  assert.ok(reopened.list(['gemini']).some(m=>m.id==='gemini-new'&&m.source==='cloud'));
+});

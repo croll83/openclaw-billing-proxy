@@ -16,18 +16,18 @@ function startServer(config) {
   const server = http.createServer((req, res) => {
     if (req.url === '/health' && req.method === 'GET') {
       try {
-        const oauth = getToken(config.credsPath);
-        const expiresIn = (oauth.expiresAt - Date.now()) / 3600000;
+        const oauth = config.credsPath ? getToken(config.credsPath) : null;
+        const expiresIn = oauth ? (oauth.expiresAt - Date.now()) / 3600000 : Infinity;
         const health = {
           status: expiresIn > 0 ? 'ok' : 'token_expired',
           proxy: 'hermes-billing-proxy',
           version: config.VERSION,
           requestsServed: requestCount,
           uptime: Math.floor((Date.now() - startedAt) / 1000) + 's',
-          anthropic: {
+          anthropic: oauth ? {
             tokenExpiresInHours: expiresIn.toFixed(1),
             subscriptionType: oauth.subscriptionType
-          },
+          } : { available: false },
           layers: {
             stringReplacements: config.replacements.length,
             ccToolStubs: config.injectCCStubs ? config.CC_TOOL_STUBS.length : 0,
@@ -35,14 +35,15 @@ function startServer(config) {
           }
         };
         try {
-          const gi = getGeminiTokenSync();
-          const gCredsPath = getGeminiCredsPath();
-          const gCreds = JSON.parse(fs.readFileSync(gCredsPath, 'utf8'));
-          const gExpiry = gCreds.expiry_date ? ((gCreds.expiry_date - Date.now()) / 3600000).toFixed(1) : 'unknown';
+          const agy = config.geminiBackend === 'antigravity';
+          const gi = agy ? require('./src/auth/antigravity').readCredentials(config) : getGeminiTokenSync(config.geminiCredentialsPath);
+          const expiry = agy ? gi.expiresAt : gi.creds.expiry_date;
+          const gExpiry = expiry ? ((expiry - Date.now()) / 3600000).toFixed(1) : 'unknown';
           health.gemini = {
             available: true,
+            backend: config.geminiBackend || 'cloudcode',
             tokenExpiresInHours: gExpiry,
-            needsRefresh: gi.needsRefresh
+            needsRefresh: agy ? expiry <= Date.now()+60000 : gi.needsRefresh
           };
         } catch (e) {
           health.gemini = { available: false, error: e.message };
@@ -109,14 +110,18 @@ function startServer(config) {
   const bindAddr = config.bindAddress || '0.0.0.0';
   server.listen(config.port, bindAddr, () => {
     try {
-      const oauth = getToken(config.credsPath);
-      const h = ((oauth.expiresAt - Date.now()) / 3600000).toFixed(1);
+      const oauth = config.credsPath ? getToken(config.credsPath) : null;
+      const h = oauth ? ((oauth.expiresAt - Date.now()) / 3600000).toFixed(1) : '?';
       console.log(`\n  AI Engine Proxy v${config.VERSION}`);
       console.log(`  ────────────────────────────────────`);
       console.log(`  Port:              ${config.port}`);
-      console.log(`  Anthropic:         ${oauth.subscriptionType} (token expires ${h}h)`);
+      console.log(`  Anthropic:         ${oauth ? `${oauth.subscriptionType} (token expires ${h}h)` : 'not configured'}`);
       try {
-        const gPath = getGeminiCredsPath();
+        const gPath = config.geminiBackend === 'antigravity' ? null : getGeminiCredsPath(config.geminiCredentialsPath);
+        if (config.geminiBackend === 'antigravity') {
+          require('./src/auth/antigravity').readCredentials(config);
+          console.log('  Gemini:            enabled (subscription backend)');
+        } else
         if (gPath) {
           const gCreds = JSON.parse(fs.readFileSync(gPath, 'utf8'));
           const gh = gCreds.expiry_date ? ((gCreds.expiry_date - Date.now()) / 3600000).toFixed(1) : '?';

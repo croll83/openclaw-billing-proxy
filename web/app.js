@@ -31,7 +31,8 @@ function render(){
       c.append(node('p',(stale?'Stale / unavailable — excluded from routing. ':'Cloud quota · ')+time(a.quotaUpdatedAt),'muted'));
       if(a.quotaError)c.append(node('p',a.quotaError,'muted'));
     }else {
-      c.append(node('p','Cloud project: '+a.project,'muted'));
+      c.append(node('p',a.project?'Cloud project: '+a.project:'Cloud project discovered automatically','muted'));
+      for(const g of a.quota?.groups||[])for(const b of g.buckets||[])c.append(node('p',`${g.displayName} · ${b.displayName||b.window}: ${(b.remainingFraction*100).toFixed(1)}% remaining · resets ${time(b.resetTime)}`,'muted'));
       const buckets=a.quota?.buckets||[];
       for(const b of buckets)c.append(node('p',`${b.modelId}: ${(b.remainingFraction*100).toFixed(1)}% remaining · resets ${time(b.resetTime)}`,'muted'));
       c.append(node('p',buckets.length?'Cloud quota updated '+time(a.quotaUpdatedAt):'Cloud quota unavailable. No 5-hour / 7-day windows or estimated percentages.','muted'));
@@ -47,6 +48,10 @@ function render(){
   if(!state.accounts.length)$('#account-list').append(node('div','Add an account to its provider pool. No credentials are imported automatically.','empty'));
   $('#key-list').replaceChildren();$('#no-keys').hidden=state.keys.length>0;
   for(const k of state.keys){const row=node('tr');const name=node('td');name.append(node('b',k.app),node('div',k.name+' · '+k.prefix+'…','muted'));row.append(name,node('td',k.providers.join(', ')),node('td',k.sourceIps.join(', ')||'Any source'),node('td',`${state.pool.byKey[k.id]||0} / ${k.maxConcurrent}`),node('td',k.enabled?'Enabled':'Disabled'));const actions=node('td');actions.append(button('Edit',()=>edit('keys',k)),button('Rotate',async()=>{if(!confirm('Invalidate the current key and generate a replacement?'))return;showSecret((await api('/admin/keys/'+k.id+'/rotate','POST')).secret);await refresh();}),button('Delete',()=>remove('keys',k),'danger'));row.append(actions);$('#key-list').append(row);}
+  $('#model-list').replaceChildren();
+  for(const m of state.models||[]){const row=node('tr');for(const v of [m.provider+' / '+m.family,m.alias||'—',m.id,m.source+' / '+m.availability,time(m.updated_at)])row.append(node('td',v));const actions=node('td');if(m.recommended)actions.append(button('Edit',()=>editModel(m)));row.append(actions);$('#model-list').append(row);}
+  $('#model-traffic').replaceChildren();
+  for(const m of state.modelTraffic||[]){const row=node('tr');for(const v of [m.provider,m.requestedModel,m.model,String(m.requests)])row.append(node('td',v));$('#model-traffic').append(row);}
   renderTraffic();
 }
 function renderTraffic(){if(!state)return;const rows=state[$('#window').value];$('#traffic-list').replaceChildren();$('#no-traffic').hidden=rows.length>0;for(const r of rows){const row=node('tr');for(const value of [state.keys.find(k=>k.id===r.keyId)?.app||'Deleted key',state.accounts.find(a=>a.id===r.accountId)?.name||'Deleted account',r.provider,r.requests,r.completed,r.disconnected,r.averageDurationMs==null?'In progress':(r.averageDurationMs/1000).toFixed(1)+'s'])row.append(node('td',String(value)));$('#traffic-list').append(row);}}
@@ -56,7 +61,7 @@ function edit(kind,item={}){
   editing={kind,id:item.id};$('#fields').replaceChildren();$('#form-error').textContent='';$('#edit-title').textContent=(item.id?'Edit ':'Create ')+(kind==='keys'?'API key':'account');
   field('name','Name',item.name).required=true;
   if(kind==='keys'){field('app','Application',item.app).required=true;field('providers','Allowed APIs (anthropic, gemini)',(item.providers||['anthropic','gemini']).join(', '));field('sourceIps','Allowed source IPs / CIDRs (comma-separated; empty = any)',(item.sourceIps||[]).join(', '));}
-  else{const l=node('label','Provider');l.htmlFor='field-provider';const select=node('select');select.id='field-provider';select.name='provider';for(const provider of ['anthropic','gemini']){const o=node('option',provider);o.value=provider;select.append(o);}select.value=item.provider||'anthropic';$('#fields').append(l,select);field('credentialsPath','Absolute credential file path on proxy host',item.credentialsPath).required=true;field('project','Gemini cloud project (required for Gemini)',item.project);$('#fields').append(node('p','Register a separate OAuth credential file for each account. The console never displays token contents.','muted'));}
+  else{const l=node('label','Provider');l.htmlFor='field-provider';const select=node('select');select.id='field-provider';select.name='provider';for(const provider of ['anthropic','gemini']){const o=node('option',provider);o.value=provider;select.append(o);}select.value=item.provider||'anthropic';$('#fields').append(l,select);field('credentialsPath','Absolute credential file path on proxy host',item.credentialsPath).required=true;field('project','Cloud project (legacy Gemini only; leave empty for Antigravity)',item.project);$('#fields').append(node('p','Register a separate OAuth profile for each account. Antigravity uses the Gemini provider and requires geminiBackend=antigravity on the proxy. The console never displays token contents.','muted'));}
   field('maxConcurrent','Maximum concurrent requests',item.maxConcurrent||(kind==='keys'?4:2),'number');field('enabled','Enabled',item.enabled!==false,'checkbox');$('#editor').showModal();
 }
 $('#edit-form').onsubmit=async event=>{event.preventDefault();const f=new FormData(event.target),body=Object.fromEntries(f);body.enabled=f.has('enabled');body.maxConcurrent=Number(body.maxConcurrent);if(editing.kind==='keys')for(const name of ['providers','sourceIps'])body[name]=body[name].split(',').map(s=>s.trim()).filter(Boolean);const save=event.submitter;save.disabled=true;try{const value=await api('/admin/'+editing.kind+(editing.id?'/'+editing.id:''),editing.id?'PATCH':'POST',body);$('#editor').close();if(value.secret)showSecret(value.secret);await refresh();}catch(error){$('#form-error').textContent=error.message;}finally{save.disabled=false;}};
@@ -111,3 +116,12 @@ $('#retry-login').onclick=async()=>{const b=$('#retry-login');b.disabled=true;$(
 $('#cancel-login').onclick=async()=>{const b=$('#cancel-login');b.disabled=true;try{renderLogin(await api('/admin/logins/'+loginSession.id,'DELETE'));clearTimeout(loginTimer);await refresh();}catch(e){$('#login-error').textContent=e.message;}finally{b.disabled=false;}};
 $('#close-login').onclick=()=>$('#login-dialog').close();
 $('#login-dialog').addEventListener('close',()=>{clearTimeout(loginTimer);$('#login-code').value='';$('#login-link').removeAttribute('href');loginSession=null;});
+
+async function editModel(model={}) {
+  const provider=model.provider||prompt('Provider: anthropic or gemini','anthropic');if(!provider)return;
+  const family=model.family||prompt('Family (for example sonnet, opus, haiku, fable, gemini, argon)');if(!family)return;
+  const id=prompt('Concrete model ID for '+family+'-latest',model.id||'');if(!id)return;
+  if(!confirm('Route new '+family+'-latest requests to '+id+'? Existing conversations may switch models on their next request.'))return;
+  await api('/admin/models','PUT',{provider,family,id});await refresh();
+}
+$('#add-model').onclick=()=>editModel().catch(error=>notice(error.message));

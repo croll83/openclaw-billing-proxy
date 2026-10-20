@@ -1,5 +1,6 @@
 const { getValidToken, refreshToken } = require('../auth/anthropicToken');
 const { getGeminiTokenSync, refreshGeminiToken } = require('../auth/geminiToken');
+const antigravity = require('../auth/antigravity');
 function normalize(value) {
   const result = {};
   for (const name of ['five_hour','seven_day','seven_day_opus','seven_day_sonnet']) {
@@ -19,6 +20,7 @@ function normalizeGemini(value) {
 }
 class QuotaMonitor {
   constructor(store, { intervalMs = 120000, fetcher = fetch, tokenReader = getValidToken, geminiConfig = {}, geminiTokenReader, tokenRefresher = refreshToken } = {}) {
+    this.geminiConfig = geminiConfig;
     this.tokenRefresher = tokenRefresher; this.suspended = new Set();
     this.store = store; this.intervalMs = intervalMs; this.fetcher = fetcher; this.tokenReader = tokenReader;
     this.geminiTokenReader = geminiTokenReader || (async account => {
@@ -28,6 +30,20 @@ class QuotaMonitor {
     this.pending = new Map(); this.lastAttempt = new Map(); this.retryAt = new Map(); this.closed = false;
   }
   async read(account) {
+        if (account.provider === 'gemini' && this.geminiConfig.geminiBackend === 'antigravity') {
+          try {
+            const quota = await antigravity.quota({ ...this.geminiConfig, geminiCredentialsPath: account.credentialsPath });
+            if (!quota.buckets.length) throw new Error('Subscription windows unavailable');
+            return quota;
+          } catch (error) {
+            if (error.upstreamStatus === 429) {
+              const seconds = Number(error.retryAfter);
+              const delay = error.retryAfter && Number.isFinite(seconds) ? seconds*1000 : Date.parse(error.retryAfter)-Date.now();
+              this.retryAt.set(account.id, Date.now()+Math.max(30000, Number.isFinite(delay) ? delay : 120000));
+            }
+            throw error;
+          }
+        }
         const anthropic = account.provider === 'anthropic';
         const token = anthropic ? (await this.tokenReader(account.credentialsPath)).accessToken : await this.geminiTokenReader(account);
         const request = token => this.fetcher(anthropic ? 'https://api.anthropic.com/api/oauth/usage' : 'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota', {

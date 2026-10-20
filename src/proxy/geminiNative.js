@@ -5,6 +5,9 @@ const { getGeminiTokenSync, refreshGeminiToken } = require('../auth/geminiToken'
 const { debugDump } = require('../utils');
 
 function handleGeminiNativeRequest(bodyStr, req, res, config, reqNum, ts) {
+  if (config.geminiBackend === 'antigravity') {
+    return require('./antigravity').handleAntigravityRequest(bodyStr, req, res, config);
+  }
   const life = lifecycle(req, res, config);
   const urlMatch = req.url.match(/\/models\/(gemini[^/:]*):(stream)?[gG]enerateContent/);
   if (!urlMatch) {

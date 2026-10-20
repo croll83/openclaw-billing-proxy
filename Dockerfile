@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
     && dpkg-deb --build --root-owner-group /tmp/pkg /tmp/zlib.deb
 
 FROM node:22-bookworm-slim
-ARG VERSION=2.3.0
+ARG VERSION=2.4.0
 LABEL org.opencontainers.image.title="ai-engine-proxy" \
       org.opencontainers.image.version="${VERSION}"
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates \

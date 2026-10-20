@@ -83,6 +83,9 @@ class Store {
     if (!this.db.prepare('PRAGMA table_info(accounts)').all().some(c => c.name === 'authStatus')) {
       this.db.exec("ALTER TABLE accounts ADD COLUMN authStatus TEXT NOT NULL DEFAULT 'unknown'");
     }
+    if (!this.db.prepare('PRAGMA table_info(requests)').all().some(c => c.name === 'requestedModel')) {
+      this.db.exec('ALTER TABLE requests ADD COLUMN requestedModel TEXT');
+    }
     this.db.prepare("UPDATE requests SET finishedAt=?, outcome='interrupted_restart' WHERE finishedAt IS NULL").run(Date.now());
   }
   audit(action, id) { this.db.prepare('INSERT INTO audit(at,action,entityId) VALUES(?,?,?)').run(Date.now(), action, id); }
@@ -124,7 +127,7 @@ class Store {
     const name = label(item.name), maxConcurrent = integer(item.maxConcurrent, 2);
     const provider = item.provider ?? 'anthropic';
     if (!['anthropic','gemini'].includes(provider)) bad('Invalid provider');
-    const project = provider === 'gemini' ? label(item.project) : null;
+    let project = provider === 'gemini' && item.project ? label(item.project) : null;
     if (item.enabled !== undefined && typeof item.enabled !== 'boolean') bad('enabled must be boolean');
     if (typeof item.credentialsPath !== 'string' || !path.isAbsolute(item.credentialsPath)) bad('Use an absolute credentials file path on the proxy host');
     let canonical;
@@ -133,7 +136,10 @@ class Store {
       const stat = fs.statSync(canonical);
       if (!stat.isFile() || stat.size > 1024 * 1024) bad('Invalid credentials file');
       const creds = JSON.parse(fs.readFileSync(canonical,'utf8').replace(/^\uFEFF/,''));
-      if (provider === 'anthropic' ? !creds.claudeAiOauth?.accessToken : !creds.access_token) bad('File does not contain provider OAuth credentials');
+      const agy = typeof creds.token?.access_token === 'string' && Number.isFinite(Date.parse(creds.token?.expiry));
+      if (provider === 'anthropic' ? !creds.claudeAiOauth?.accessToken : !(creds.access_token || agy)) bad('File does not contain provider OAuth credentials');
+      if (provider === 'gemini' && !agy && !project) bad('Legacy Gemini credentials require a project');
+      if (provider === 'gemini' && agy) project = null; // Always discover the account's own project.
     } catch (_) { bad('Cannot read a valid provider credentials file'); }
     if (this.accounts().some(a => a.id !== id && a.credentialsPath === canonical)) bad('Credentials already registered');
     if (!id) {
@@ -172,9 +178,9 @@ class Store {
   }
   cooldown(id, until) { this.db.prepare('UPDATE accounts SET cooldownUntil=MAX(cooldownUntil,?) WHERE id=?').run(until,id); }
   authStatus(id, status) { this.db.prepare('UPDATE accounts SET authStatus=? WHERE id=?').run(status,id); }
-  begin({keyId,accountId,provider,model}) {
+  begin({keyId,accountId,provider,model,requestedModel}) {
     const id = randomUUID();
-    this.db.prepare('INSERT INTO requests(id,keyId,accountId,provider,model,startedAt) VALUES(?,?,?,?,?,?)').run(id,keyId ?? null,accountId ?? null,provider,model,Date.now()); return id;
+    this.db.prepare('INSERT INTO requests(id,keyId,accountId,provider,model,startedAt,requestedModel) VALUES(?,?,?,?,?,?,?)').run(id,keyId ?? null,accountId ?? null,provider,model,Date.now(),requestedModel ?? model); return id;
   }
   finish(id,status,outcome) {
     this.db.prepare('UPDATE requests SET finishedAt=?,status=?,outcome=? WHERE id=? AND finishedAt IS NULL').run(Date.now(),status,outcome,id);
@@ -185,6 +191,10 @@ class Store {
       SUM(CASE WHEN outcome='disconnected' THEN 1 ELSE 0 END) disconnected,
       AVG(finishedAt-startedAt) averageDurationMs
       FROM requests WHERE startedAt>=? GROUP BY keyId,accountId,provider`).all(Date.now()-hours*3600000);
+  }
+  modelReport(hours) {
+    return this.db.prepare(`SELECT provider,COALESCE(requestedModel,model) requestedModel,model,COUNT(*) requests
+      FROM requests WHERE startedAt>=? GROUP BY provider,COALESCE(requestedModel,model),model`).all(Date.now()-hours*3600000);
   }
   quotaHistory(id) {
     return this.db.prepare('SELECT at,quota FROM quota_samples WHERE accountId=? AND at>=? ORDER BY at DESC LIMIT 1000').all(id,Date.now()-7*86400000).map(r=>({...r,quota:JSON.parse(r.quota)}));

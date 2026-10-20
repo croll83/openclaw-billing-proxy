@@ -6,6 +6,7 @@ const { Store, integer, allowsIP } = require('./store');
 const { Pool } = require('./pool');
 const { QuotaMonitor } = require('./quota');
 const { LoginManager } = require('./login');
+const { Catalog } = require('./catalog');
 const { handleAnthropicRequest } = require('../proxy/anthropic');
 const { handleGeminiRequest } = require('../proxy/gemini');
 const { handleGeminiNativeRequest } = require('../proxy/geminiNative');
@@ -36,7 +37,7 @@ function parseBody(body) {
 }
 function route(url, body) {
   const pathname = new URL(url,'http://proxy.invalid').pathname;
-  if (/^\/v1(?:beta)?\/models\/gemini[^/:]+:(?:streamGenerateContent|generateContent)$/.test(pathname)) {
+  if (/^(?:\/v1(?:beta)?)?\/models\/gemini[^/:]+:(?:streamGenerateContent|generateContent)$/.test(pathname)) {
     return { provider: 'gemini', native: true, model: pathname.split('/models/')[1].split(':')[0] };
   }
   if (!['/v1/messages','/v1/messages/count_tokens','/v1/chat/completions'].includes(pathname)) {
@@ -63,6 +64,7 @@ function createManagedServers(config, overrides = {}) {
   const adminHost = options.bindAddress || '127.0.0.1';
   if (!isIP(adminHost) || !allowsIP(['127.0.0.0/8','::1','100.64.0.0/10'],adminHost)) throw new Error('Unauthenticated console must bind to loopback or Tailscale');
   const store = overrides.store || new Store(path.resolve(options.databasePath || 'data/proxy.sqlite'));
+  const catalog = new Catalog(store);
   const pool = new Pool(store,{ maxConcurrent: integer(options.maxConcurrent,32), stickyUsageThreshold: options.stickyUsageThreshold ?? 95 });
   const monitor = new QuotaMonitor(store,{geminiConfig:config,...overrides.quotaOptions});
   const logins = new LoginManager(store,pool,monitor,{directory:options.accountsDirectory || path.join(path.dirname(path.resolve(options.databasePath || 'data/proxy.sqlite')),'accounts'),command:options.claudeCommand || 'claude',...overrides.loginOptions});
@@ -74,9 +76,19 @@ function createManagedServers(config, overrides = {}) {
     try {
       if (req.method === 'GET' && req.url === '/health') { json(res,200,{status:pool.accepting ? 'ok' : 'draining'}); return; }
       const bearer = /^Bearer (\S+)$/i.exec(req.headers.authorization || '')?.[1];
-      const rawKey = req.headers['x-api-key'] || bearer;
+      const nativePath = /^(?:\/v1(?:beta)?)?\/models\/(?:gemini[^/:]+|argon-latest):(?:streamGenerateContent|generateContent)$/.test(req.url.split('?')[0]);
+      const rawKey = req.headers['x-api-key'] || bearer || (nativePath ? req.headers['x-goog-api-key'] : undefined);
       let key = store.authenticate(rawKey,req.socket.remoteAddress);
       if (!key) { json(res,401,{error:{code:'invalid_api_key',message:'Missing, revoked or unauthorized API key'}}); req.resume(); return; }
+      const catalogUrl=new URL(req.url,'http://proxy.invalid');
+      if (req.method==='GET' && ['/v1/models','/v1/models/latest'].includes(catalogUrl.pathname)) {
+        const provider=catalogUrl.searchParams.get('provider'),family=catalogUrl.searchParams.get('family');
+        if(provider && !['anthropic','gemini'].includes(provider)) { json(res,400,{error:{message:'Unknown provider'}});return; }
+        if(provider && !key.providers.includes(provider)) { json(res,403,{error:{message:'API key does not allow this provider'}});return; }
+        const result=catalogUrl.pathname.endsWith('/latest') ? catalog.latest(provider,family,key.providers) :
+          {object:'list',data:catalog.list(provider?[provider]:key.providers).filter(m=>!family||m.family===family)};
+        json(res,200,result);return;
+      }
       if (req.method !== 'POST') { json(res,405,{error:{message:'Use POST for inference'}}); req.resume(); return; }
       if (!pool.accepting || pending >= maxPending) { json(res,503,{error:{message:'Proxy admission capacity reached'}}); req.resume(); return; }
       pending++;
@@ -85,15 +97,23 @@ function createManagedServers(config, overrides = {}) {
       if (res.destroyed) return;
       key = store.authenticate(rawKey,req.socket.remoteAddress);
       if (!key) { json(res,401,{error:{message:'API key revoked or access changed during upload'}}); return; }
-      const body = parseBody(bodyStr), target = route(req.url,body);
+      const body = parseBody(bodyStr);
+      const nativeMatch=/^(\/(?:v1(?:beta)?\/)?models\/)([^/:]+)(:(?:streamGenerateContent|generateContent))(\?.*)?$/.exec(req.url);
+      const requestedModel=nativeMatch ? nativeMatch[2] : body.model;
+      if(typeof requestedModel==='string') {
+        const resolved=catalog.resolve(requestedModel,key.providers,nativeMatch?'gemini':undefined);
+        if(nativeMatch) req.url=nativeMatch[1]+resolved+nativeMatch[3]+(nativeMatch[4]||'');
+        else if(resolved!==requestedModel) {body.model=resolved;bodyStr=JSON.stringify(body);}
+      }
+      const target = route(req.url,body);
       if (!key.providers.includes(target.provider)) { json(res,403,{error:{message:'API key does not allow this provider'}}); return; }
       const lease = pool.acquire(key,target.provider,req.socket.remoteAddress || '',target.model);
       let id;
-      try { id = store.begin({keyId:key.id,accountId:lease.account.id,provider:target.provider,model:target.model}); }
+      try { id = store.begin({keyId:key.id,accountId:lease.account.id,provider:target.provider,model:target.model,requestedModel}); }
       catch (error) { lease.release(); throw error; }
       observe(res,store,id,lease.release);
       // Caller authentication/affinity belongs to this proxy, never to an upstream account.
-      delete req.headers.authorization; delete req.headers['x-api-key']; delete req.headers['x-proxy-session'];
+      delete req.headers.authorization; delete req.headers['x-api-key']; delete req.headers['x-goog-api-key']; delete req.headers['x-proxy-session'];
       const scoped = { ...config, credsPath: lease.account.credentialsPath,
         geminiCredentialsPath: lease.account.credentialsPath, GEMINI_PROJECT: lease.account.project || config.GEMINI_PROJECT,
         onUpstreamResponse: (status,headers) => {
@@ -129,7 +149,7 @@ function createManagedServers(config, overrides = {}) {
         json(res,200,{version:config.VERSION,uptimeSeconds:Math.floor((Date.now()-startedAt)/1000),
           inference:inference.address(),console:admin.address(),pool:pool.status(),pendingBodies:pending,
           idleTimeoutMs:config.anthropicTimeoutMs,requests:counter,accounts:store.accounts(),keys:store.keys(),
-          logins:logins.list(),last5Hours:store.report(5),last7Days:store.report(168)}); return;
+          logins:logins.list(),models:catalog.list(['anthropic','gemini']),modelTraffic:store.modelReport(168),last5Hours:store.report(5),last7Days:store.report(168)}); return;
       }
       const loginMatch = /^\/admin\/logins\/([a-f0-9-]+)(?:\/(code|verify))?$/.exec(pathname);
       if (req.method === 'GET' && loginMatch && !loginMatch[2]) { json(res,200,logins.public(logins.get(loginMatch[1]))); return; }
@@ -153,6 +173,9 @@ function createManagedServers(config, overrides = {}) {
         if (req.method === 'POST' && action === 'code') { const body=parseBody(await readBody(req,8192)); json(res,200,logins.submit(id,body.code)); return; }
         if (req.method === 'POST' && action === 'verify') { json(res,200,logins.retry(id)); return; }
         json(res,405,{error:{message:'Method not allowed'}}); return;
+      }
+      if(pathname==='/admin/models' && req.method==='PUT') {
+        json(res,200,catalog.save(parseBody(await readBody(req,32768))));return;
       }
       const match = /^\/admin\/(keys|accounts)(?:\/([a-f0-9-]+))?(?:\/(rotate|refresh))?$/.exec(pathname);
       if (!match) { json(res,404,{error:{message:'Unknown console endpoint'}}); return; }

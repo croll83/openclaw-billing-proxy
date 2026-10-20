@@ -1,5 +1,6 @@
 // Gemini handlers convert wire formats, but upstream lifetime must still follow the caller.
 function lifecycle(req,res,config) {
+  const startedAt = Date.now();
   let upstream, response, stopped = false;
   const cancel = () => { stopped = true; response?.destroy(); upstream?.destroy(); };
   const originalWrite = res.write;
@@ -24,7 +25,8 @@ function lifecycle(req,res,config) {
     request(value) {
       upstream = value;
       if (this.stopped) { cancel(); return; }
-      upstream.setTimeout(config.anthropicTimeoutMs ?? 3600000,() => fail(504,'Gemini upstream idle timeout'));
+      const timeout = config.anthropicTimeoutMs ?? 3600000;
+      upstream.setTimeout(timeout,() => fail(504,`Gemini upstream sent no data for ${Math.round(timeout/1000)} seconds; ${Math.round((Date.now()-startedAt)/1000)} seconds elapsed`));
       upstream.once('error',() => fail(502,'Gemini upstream connection failed'));
     },
     response(value) {
