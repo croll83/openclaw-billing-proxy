@@ -6,22 +6,23 @@ const { integer } = require('./store');
 
 function error(message, status = 400) { return Object.assign(new Error(message), { status }); }
 const terminal = new Set(['complete','failed','cancelled','expired']);
-function loginEnvironment(directory) {
+function loginEnvironment(directory, provider = 'anthropic') {
   // Do not inherit the host session's API keys, OAuth overrides or CLI settings.
   const env = {};
   for (const key of ['PATH','HOME','USER','LOGNAME','TMPDIR','LANG','LC_ALL','HTTPS_PROXY','HTTP_PROXY','NO_PROXY','https_proxy','http_proxy','no_proxy','NODE_EXTRA_CA_CERTS']) {
     if (process.env[key]) env[key] = process.env[key];
   }
-  return { ...env, CLAUDE_CONFIG_DIR:directory, BROWSER:'/bin/true', DISABLE_AUTOUPDATER:'1' };
+  return { ...env, CLAUDE_CONFIG_DIR:directory, BROWSER:'/bin/true', DISABLE_AUTOUPDATER:'1',
+    ...(provider==='gemini' ? {HOME:directory,XDG_CONFIG_HOME:path.join(directory,'.config'),XDG_CACHE_HOME:path.join(directory,'.cache'),XDG_DATA_HOME:path.join(directory,'.local/share'),SSH_CONNECTION:'127.0.0.1 1 127.0.0.1 2',TERM:'xterm-256color',AGY_CLI_DISABLE_AUTO_UPDATE:'true'} : {}) };
 }
 class LoginManager {
-  constructor(store, pool, monitor, { directory, command = 'claude', spawnProcess = spawn, timeoutMs = 600000 } = {}) {
+  constructor(store, pool, monitor, { directory, command = 'claude', agyCommand = 'agy', geminiBackend = 'cloudcode', spawnProcess = spawn, timeoutMs = 600000 } = {}) {
     this.store=store; this.pool=pool; this.monitor=monitor;
-    this.directory=path.resolve(directory || 'data/accounts'); this.command=command;
+    this.directory=path.resolve(directory || 'data/accounts'); this.command=command; this.agyCommand=agyCommand; this.geminiBackend=geminiBackend;
     this.spawnProcess=spawnProcess; this.timeoutMs=timeoutMs; this.sessions=new Map(); this.closed=false;
   }
   public(session) {
-    return { id:session.id, accountId:session.accountId || null, name:session.name,
+    return { id:session.id, accountId:session.accountId || null, name:session.name, provider:session.provider,
       status:session.status, expiresAt:session.expiresAt, authorizationUrl:session.authorizationUrl || null,
       message:session.message || null };
   }
@@ -34,48 +35,60 @@ class LoginManager {
     if (this.list().length >= 4 || this.sessions.size >= 32) throw error('Too many login attempts; wait for existing sessions to expire',429);
     const old=accountId ? this.store.accounts().find(a=>a.id===accountId) : null;
     if (accountId && !old) throw error('Account not found',404);
-    if ((old?.provider || input.provider || 'anthropic') !== 'anthropic') throw error('Guided login currently supports Anthropic; register a Gemini credential file instead');
+    const provider=old?.provider || input.provider || 'anthropic';
+    if (!['anthropic','gemini'].includes(provider)) throw error('Invalid provider');
+    if (provider==='gemini' && this.geminiBackend!=='antigravity') throw error('Guided Gemini login requires the Antigravity backend');
     if (accountId && (this.locked(accountId) || this.pool.byAccount.get(accountId))) throw error('Wait for active requests or an existing login before reconnecting',409);
     const name=old?.name || input.name;
     if (typeof name !== 'string' || !name.trim() || name.length>120) throw error('Name must contain 1–120 characters');
     const maxConcurrent=integer(old?.maxConcurrent ?? input.maxConcurrent,2);
     fs.mkdirSync(this.directory,{recursive:true,mode:0o700});
-    const directory=fs.mkdtempSync(path.join(this.directory,'claude-')); fs.chmodSync(directory,0o700);
-    const s={id:randomUUID(),accountId,name:name.trim(),maxConcurrent,old,directory,
-      credentialsPath:path.join(directory,'.credentials.json'),status:'starting',expiresAt:Date.now()+this.timeoutMs,buffer:'',bytes:0};
+    const directory=fs.mkdtempSync(path.join(this.directory,provider==='gemini'?'agy-':'claude-')); fs.chmodSync(directory,0o700);
+    const s={id:randomUUID(),accountId,provider,name:name.trim(),maxConcurrent,old,directory,
+      credentialsPath:provider==='gemini'?path.join(directory,'.gemini/antigravity-cli/antigravity-oauth-token'):path.join(directory,'.credentials.json'),status:'starting',expiresAt:Date.now()+this.timeoutMs,buffer:'',bytes:0};
     this.sessions.set(s.id,s);
     if (accountId) { this.pool.suspended.add(accountId); this.monitor.suspended.add(accountId); }
     s.timer=setTimeout(()=>this.stop(s,'expired','Login expired. Start a new connection.'),this.timeoutMs); s.timer.unref();
     try {
-      const child=this.spawnProcess(this.command,['auth','login','--claudeai'],{
-        cwd:directory, env:loginEnvironment(directory), stdio:['pipe','pipe','pipe'], shell:false,
+      const agy=provider==='gemini';
+      // AGY's interactive OAuth flow needs a PTY. Quote the configured executable as one shell argument.
+      const quoted="'"+this.agyCommand.replace(/'/g,"'\"'\"'")+"'";
+      const child=this.spawnProcess(agy?'script':this.command,agy?['-qefc',`stty cols 4096 rows 40; exec ${quoted}`,'/dev/null']:['auth','login','--claudeai'],{
+        cwd:directory, env:loginEnvironment(directory,provider), stdio:['pipe','pipe','pipe'], shell:false, detached:agy,
       });
+      s.processGroup=agy && child.pid;
+      if(agy){s.credentialPoll=setInterval(()=>this.checkSaved(s),200);s.credentialPoll.unref();}
       s.child=child;
       s.exited=new Promise(resolve=>child.once('close',resolve));
       child.stdout.on('data',chunk=>this.output(s,chunk)); child.stderr.on('data',chunk=>this.output(s,chunk));
       child.stdin.on('error',()=>{});
-      child.once('error',()=>this.stop(s,'failed','Unable to start Claude Code. Check the configured CLI executable.'));
+      child.once('error',()=>this.stop(s,'failed','Unable to start login CLI. Check the configured executable.'));
       child.once('close',code=>{
         s.child=null;
         if (s.stopping) return;
         s.authorizationUrl=null; s.buffer='';
-        if (code !== 0) { this.stop(s,'failed','Login did not complete. Start again and use the code from the new link.'); return; }
+        clearInterval(s.credentialPoll);
+        if (code !== 0 && !s.authSaved) { this.stop(s,'failed','Login did not complete. Start again and use the code from the new link.'); return; }
         this.verify(s).catch(()=>this.stop(s,'failed','Unable to save the connected account.'));
       });
-    } catch (_) { this.stop(s,'failed','Unable to start Claude Code. Check the configured CLI executable.'); }
+    } catch (_) { this.stop(s,'failed','Unable to start login CLI. Check the configured executable.'); }
     return this.public(s);
   }
   output(s,chunk) {
-    if (s.stopping || terminal.has(s.status) || s.codeSubmitted) return;
+    if (s.stopping || terminal.has(s.status)) return;
+    if(s.provider==='gemini' && chunk.toString().includes('\x1b[6n'))s.child?.stdin.write('\x1b[1;1R');
+    if(s.codeSubmitted)return;
     s.bytes+=chunk.length;
-    if (s.bytes>65536) { this.stop(s,'failed','Unexpected CLI output. Check Claude Code compatibility.'); return; }
+    if (s.bytes>65536) { this.stop(s,'failed','Unexpected CLI output. Check login CLI compatibility.'); return; }
     s.buffer=(s.buffer+chunk.toString('utf8')).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').slice(-16384);
+    if(s.provider==='gemini' && !s.selectedLogin && s.buffer.includes('Select login method')){s.selectedLogin=true;s.child.stdin.write('\r');}
     // Only complete, allowlisted provider authorization links are exposed. Raw CLI output is never returned/logged.
     for (const match of s.buffer.matchAll(/https:\/\/[^\s<>"']+(?=\s)/g)) {
       try {
         const url=new URL(match[0]);
         if (url.username || url.password || url.port) continue;
-        if (![['claude.com','/cai/oauth/authorize'],['claude.ai','/oauth/authorize']].some(([host,p])=>url.hostname===host && url.pathname===p)) continue;
+        const allowed=s.provider==='gemini'?[['accounts.google.com','/o/oauth2/auth'],['accounts.google.com','/o/oauth2/v2/auth']]:[['claude.com','/cai/oauth/authorize'],['claude.ai','/oauth/authorize']];
+        if (!allowed.some(([host,p])=>url.hostname===host && url.pathname===p)) continue;
         if (!url.searchParams.get('state') || !url.searchParams.get('code_challenge')) continue;
         s.authorizationUrl=url.href; s.status='awaiting_login';
       } catch (_) {}
@@ -87,8 +100,41 @@ class LoginManager {
     if (s.status !== 'awaiting_login' || !s.child || s.codeSubmitted) throw error('This login is not waiting for a code',409);
     if (typeof code !== 'string' || !code.trim() || code.length>4096 || /[\s\x00-\x1f\x7f]/.test(code.trim())) throw error('Paste only the authorization code');
     s.codeSubmitted=true; s.status='authorizing'; s.authorizationUrl=null;
-    s.child.stdin.write(code.trim()+'\n');
+    s.child.stdin.write(code.trim()+(s.provider==='gemini'?'\r':'\n'));
     return this.public(s);
+  }
+  signal(s,child,signal) {
+    if(!s.processGroup){child.kill(signal);return;}
+    // Signal the PTY child, leaving script alive to waitpid/reap it. Killing the
+    // wrapper first would orphan a zombie under a Node PID 1 in containers.
+    try {
+      const children=fs.readFileSync(`/proc/${child.pid}/task/${child.pid}/children`,'utf8').trim().split(/\s+/).filter(Boolean);
+      let sent=false;
+      for(const value of children){
+        const pid=Number(value);
+        try{
+          const raw=fs.readFileSync(`/proc/${pid}/stat`,'utf8');
+          const fields=raw.slice(raw.lastIndexOf(')')+2).split(' ');
+          if(Number(fields[1])!==child.pid)continue;
+          process.kill(Number(fields[2])===pid?-pid:pid,signal);sent=true;
+        }catch(e){if(e.code!=='ESRCH' && e.code!=='ENOENT')throw e;}
+      }
+      if(sent)return;
+    }catch(e){if(e.code!=='ENOENT')throw e;}
+    try{process.kill(-s.processGroup,signal);}catch(e){if(e.code!=='ESRCH')throw e;}
+  }
+  checkSaved(s) {
+    if(s.stopping || s.authSaved || !s.codeSubmitted || !s.child)return;
+    try{
+      const stat=fs.lstatSync(s.credentialsPath);
+      if(!stat.isFile() || stat.isSymbolicLink() || stat.size>1024*1024)return;
+      const token=JSON.parse(fs.readFileSync(s.credentialsPath,'utf8')).token;
+      if(!token?.access_token || !token.refresh_token || !Number.isFinite(Date.parse(token.expiry)))return;
+      s.authSaved=true;clearInterval(s.credentialPoll);
+      const child=s.child;this.signal(s,child,'SIGTERM');
+      s.killTimer=setTimeout(()=>this.signal(s,child,'SIGKILL'),s.provider==='gemini'?5000:2000);s.killTimer.unref();
+      s.exited.finally(()=>clearTimeout(s.killTimer));
+    }catch(_){}
   }
   async verify(s) {
     if (s.stopping || terminal.has(s.status) || s.status==='verifying') return;
@@ -97,20 +143,21 @@ class LoginManager {
       try {
         const stat=fs.lstatSync(s.credentialsPath);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.size>1024*1024) throw error('Invalid credential file');
-        const oauth=JSON.parse(fs.readFileSync(s.credentialsPath,'utf8')).claudeAiOauth;
-        if (!oauth?.accessToken || !oauth.refreshToken) throw error('Renewable credentials missing');
+        const saved=JSON.parse(fs.readFileSync(s.credentialsPath,'utf8'));
+        const oauth=s.provider==='gemini'?saved.token:saved.claudeAiOauth;
+        if (s.provider==='gemini'?(!oauth?.access_token || !oauth.refresh_token || !Number.isFinite(Date.parse(oauth.expiry))):(!oauth?.accessToken || !oauth.refreshToken)) throw error('Renewable credentials missing');
         fs.chmodSync(s.credentialsPath,0o600);
-      } catch (_) { await this.stop(s,'failed','Claude Code did not save valid renewable credentials. Start a new login.'); return; }
+      } catch (_) { await this.stop(s,'failed','Login CLI did not save valid renewable credentials. Start a new login.'); return; }
       try {
         // Wait out a refresh already using the previous profile before replacing its reference.
         if (s.accountId) await this.monitor.pending.get(s.accountId);
-        const quota=await this.monitor.read({id:s.id,provider:'anthropic',credentialsPath:s.credentialsPath});
+        const quota=await this.monitor.read({id:s.id,provider:s.provider,credentialsPath:s.credentialsPath});
         if (s.stopping || this.closed) return;
         if (s.accountId && !this.store.accounts().some(a=>a.id===s.accountId && a.credentialsPath===s.old.credentialsPath)) throw error('Account changed during login');
         this.store.db.exec('BEGIN IMMEDIATE');
         let account;
         try {
-          account=this.store.saveAccount({name:s.name,provider:'anthropic',maxConcurrent:s.maxConcurrent,
+          account=this.store.saveAccount({name:s.name,provider:s.provider,maxConcurrent:s.maxConcurrent,
             credentialsPath:s.credentialsPath,enabled:s.old ? s.old.enabled : true},s.accountId);
           this.store.quota(account.id,quota); this.store.authStatus(account.id,'ok');
           this.store.db.exec('COMMIT');
@@ -135,7 +182,7 @@ class LoginManager {
     return this.public(s);
   }
   release(s) {
-    clearTimeout(s.timer); s.authorizationUrl=null; s.buffer='';
+    clearTimeout(s.timer); clearInterval(s.credentialPoll); clearTimeout(s.killTimer); s.authorizationUrl=null; s.buffer='';
     if (s.old) { this.pool.suspended.delete(s.old.id); this.monitor.suspended.delete(s.old.id); }
   }
   async stop(s,status='cancelled',message='Login cancelled. Existing credentials are unchanged.') {
@@ -143,8 +190,8 @@ class LoginManager {
     s.status=status; s.message=message; s.authorizationUrl=null;
     s.stopping=(async()=>{
       if (s.child) {
-        const child=s.child; child.kill('SIGTERM');
-        const kill=setTimeout(()=>child.kill('SIGKILL'),2000); kill.unref();
+        const child=s.child; this.signal(s,child,'SIGTERM');
+        const kill=setTimeout(()=>this.signal(s,child,'SIGKILL'),s.provider==='gemini'?5000:2000); kill.unref();
         await s.exited; clearTimeout(kill);
       }
       // Staged profiles are never referenced by the pool before verification commits.

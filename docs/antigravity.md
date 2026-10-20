@@ -29,7 +29,7 @@ Example for a separate local test instance:
 
 Only `geminiBackend` is required to opt in. The default credential path is
 `HOME/.gemini/antigravity-cli/antigravity-oauth-token`; the default command is
-`agy` in PATH. Run an interactive AGY login first under the account's HOME.
+`agy` in PATH. Managed mode offers **Connect Antigravity** in the console: each login creates its own HOME, prompts for a Google authorization code, and joins the Gemini pool only after cloud quota verification. **Reconnect** replaces one account profile while retaining its identity and limits. Manual registrations can still use an interactive AGY login under the account's HOME.
 An Anthropic credential file is not required for an Antigravity-only instance.
 `antigravityUserAgent` can override the observed 1.4.3 fingerprint when a future
 CLI version requires it.

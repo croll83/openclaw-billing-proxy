@@ -67,7 +67,7 @@ function createManagedServers(config, overrides = {}) {
   const catalog = new Catalog(store);
   const pool = new Pool(store,{ maxConcurrent: integer(options.maxConcurrent,32), stickyUsageThreshold: options.stickyUsageThreshold ?? 95 });
   const monitor = new QuotaMonitor(store,{geminiConfig:config,...overrides.quotaOptions});
-  const logins = new LoginManager(store,pool,monitor,{directory:options.accountsDirectory || path.join(path.dirname(path.resolve(options.databasePath || 'data/proxy.sqlite')),'accounts'),command:options.claudeCommand || 'claude',...overrides.loginOptions});
+  const logins = new LoginManager(store,pool,monitor,{directory:options.accountsDirectory || path.join(path.dirname(path.resolve(options.databasePath || 'data/proxy.sqlite')),'accounts'),command:options.claudeCommand || 'claude',agyCommand:config.antigravityCommand || 'agy',geminiBackend:config.geminiBackend,...overrides.loginOptions});
   const maxBodyBytes = integer(options.maxBodyBytes,16*1024*1024,128*1024*1024);
   const maxPending = integer(options.maxPendingBodies,64);
   let pending = 0, counter = 0;
@@ -149,7 +149,7 @@ function createManagedServers(config, overrides = {}) {
         json(res,200,{version:config.VERSION,uptimeSeconds:Math.floor((Date.now()-startedAt)/1000),
           inference:inference.address(),console:admin.address(),pool:pool.status(),pendingBodies:pending,
           idleTimeoutMs:config.anthropicTimeoutMs,requests:counter,accounts:store.accounts(),keys:store.keys(),
-          logins:logins.list(),models:catalog.list(['anthropic','gemini']),modelTraffic:store.modelReport(168),last5Hours:store.report(5),last7Days:store.report(168)}); return;
+          guidedProviders:config.geminiBackend==='antigravity'?['anthropic','gemini']:['anthropic'],logins:logins.list(),models:catalog.list(['anthropic','gemini']),modelTraffic:store.modelReport(168),last5Hours:store.report(5),last7Days:store.report(168)}); return;
       }
       const loginMatch = /^\/admin\/logins\/([a-f0-9-]+)(?:\/(code|verify))?$/.exec(pathname);
       if (req.method === 'GET' && loginMatch && !loginMatch[2]) { json(res,200,logins.public(logins.get(loginMatch[1]))); return; }

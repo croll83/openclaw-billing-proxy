@@ -145,7 +145,11 @@ class Store {
     if (!id) {
       id = randomUUID();
       this.db.prepare('INSERT INTO accounts(id,name,provider,project,credentialsPath,enabled,maxConcurrent,createdAt) VALUES(?,?,?,?,?,?,?,?)').run(id,name,provider,project,canonical,item.enabled === false ? 0 : 1,maxConcurrent,Date.now());
-    } else this.db.prepare('UPDATE accounts SET name=?,provider=?,project=?,credentialsPath=?,enabled=?,maxConcurrent=?,quota=NULL,quotaUpdatedAt=NULL,quotaError=NULL,cooldownUntil=0 WHERE id=?').run(name,provider,project,canonical,item.enabled === false ? 0 : 1,maxConcurrent,id);
+    } else {
+      const changed=old.provider!==provider || old.project!==project || old.credentialsPath!==canonical;
+      const reset=changed?',quota=NULL,quotaUpdatedAt=NULL,quotaError=NULL,cooldownUntil=0':'';
+      this.db.prepare(`UPDATE accounts SET name=?,provider=?,project=?,credentialsPath=?,enabled=?,maxConcurrent=?${reset} WHERE id=?`).run(name,provider,project,canonical,item.enabled === false ? 0 : 1,maxConcurrent,id);
+    }
     this.audit(old ? 'account.update' : 'account.create',id); return this.accounts().find(a => a.id === id);
   }
   remove(kind,id) {

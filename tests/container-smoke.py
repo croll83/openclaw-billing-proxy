@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Container contract check. Requires Docker, Python 3 and a built image.
-Usage: python3 tests/container-smoke.py [ai-engine-proxy:2.4.1]
+Usage: python3 tests/container-smoke.py [ai-engine-proxy:2.5.0]
 Only the randomly named resources created by this script are removed.
 """
 import json
@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-image = sys.argv[1] if len(sys.argv) > 1 else 'ai-engine-proxy:2.4.1'
+image = sys.argv[1] if len(sys.argv) > 1 else 'ai-engine-proxy:2.5.0'
 name = 'engine-check-' + uuid.uuid4().hex[:12]
 volume, sidecar = name + '-data', name + '-nginx'
 
@@ -36,7 +36,7 @@ def request(base, route, method='GET', body=None, headers=None):
 with tempfile.TemporaryDirectory(prefix='engine-container-') as directory:
     directory = pathlib.Path(directory)
     (directory / 'config.json').write_text(json.dumps({
-        'port': 18802, 'bindAddress': '0.0.0.0',
+        'port': 18802, 'bindAddress': '0.0.0.0', 'geminiBackend': 'antigravity',
         'management': {'enabled': True, 'port': 18803, 'bindAddress': '127.0.0.1',
                        'databasePath': '/data/proxy.sqlite', 'accountsDirectory': '/data/accounts'}}))
     (directory / 'nginx.conf').write_text('''events {}
@@ -98,21 +98,29 @@ http {
         assert status == 200 and json.loads(body)['id'] == 'claude-sonnet-5-5'
         assert request(api, '/v1/models')[0] == 401
         assert request(console, '/admin/keys/' + key['key']['id'], 'DELETE', headers=headers)[0] == 200
-        status, body = request(console, '/admin/logins', 'POST', {'name': 'Container login check'}, headers)
-        assert status == 201
-        login_id = json.loads(body)['id']
-        try:
-            for attempt in range(60):
-                status, body = request(console, '/admin/logins/' + login_id, headers=headers)
-                login = json.loads(body)
-                if login['status'] == 'awaiting_login':
-                    break
-                assert login['status'] not in ['failed', 'expired'], login['message']
-                time.sleep(.5)
-            else:
-                raise AssertionError('CLI authorization link timeout')
-        finally:
-            assert request(console, '/admin/logins/' + login_id, 'DELETE', headers=headers)[0] == 200
+        for provider in ['anthropic', 'gemini']:
+            status, body = request(console, '/admin/logins', 'POST', {'name': 'Container login check', 'provider': provider}, headers)
+            assert status == 201
+            login_id = json.loads(body)['id']
+            try:
+                for attempt in range(60):
+                    status, body = request(console, '/admin/logins/' + login_id, headers=headers)
+                    login = json.loads(body)
+                    if login['status'] == 'awaiting_login':
+                        break
+                    assert login['status'] not in ['failed', 'expired'], login['message']
+                    time.sleep(.5)
+                else:
+                    raise AssertionError('CLI authorization link timeout')
+            finally:
+                assert request(console, '/admin/logins/' + login_id, 'DELETE', headers=headers)[0] == 200
+        remaining = json.loads(docker('exec', name, 'node', '-e', '''
+          const fs=require('fs');
+          const names=fs.readdirSync('/proc').filter(p=>/^\\d+$/.test(p)).flatMap(p=>{
+            try{const name=fs.readFileSync('/proc/'+p+'/comm','utf8').trim();const stat=fs.readFileSync('/proc/'+p+'/stat','utf8').split(' ');return [{name,state:stat[2],ppid:stat[3]}];}catch{return [];}
+          });process.stdout.write(JSON.stringify(names));
+        '''))
+        assert not any(p['name'] in ['agy', 'antigravity', 'script', 'claude'] for p in remaining), 'Login process survived cancellation: '+str(remaining)
         logs = docker('logs', name).lower()
         assert not any(word in logs for word in ['hermes', 'billing', 'anthropic', 'claude', 'gemini', 'openclaw'])
         assert info['HostConfig']['ReadonlyRootfs'] and info['Config']['User'] == '10001:10001'
@@ -140,7 +148,7 @@ const fs=require('fs');console.log(JSON.stringify({
         else:
             raise AssertionError('Restart with existing data volume failed')
         print('PASS: health 200, missing key 401, sidecar console and external Origin 200, both key headers')
-        print('PASS: login CLI flow starts and cancels; no account authenticated or generation sent')
+        print('PASS: both login CLI flows start and cancel without leftover processes; no account authenticated or generation sent')
         print('PASS: read-only rootfs, uid/gid 10001, neutral startup logs, runtime allowlist, persistent-volume restart')
         print('Runtime:', runtime['node'], '| Login CLI:', cli)
     except BaseException:

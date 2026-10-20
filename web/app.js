@@ -13,6 +13,7 @@ async function refresh(){try{state=await api('/admin/status');render();notice(''
 function render(){
   $('#version').textContent='v'+state.version;
   $('#summary').replaceChildren();
+  $('#connect-agy').hidden=!(state.guidedProviders||[]).includes('gemini');
   for(const [label,value] of [['Requests in flight',`${state.pool.active} / ${state.pool.limit}`],['Anthropic accounts',state.accounts.filter(a=>a.provider==='anthropic'&&a.enabled).length],['Gemini accounts',state.accounts.filter(a=>a.provider==='gemini'&&a.enabled).length],['Active API keys',state.keys.filter(k=>k.enabled).length]]){const c=node('div',undefined,'card');c.append(node('span',label),node('strong',value));$('#summary').append(c);}
   $('#listeners').replaceChildren(...[['API',state.inference],['Console',state.console]].map(([label,a])=>node('span',`${label} · ${a?.address}:${a?.port}`)),node('span',`Sticky rotation · ${state.pool.stickyUsageThreshold ?? 95}%`),node('span',`Idle timeout · ${Math.round(state.idleTimeoutMs/60000)} min`),node('span',`Uptime · ${Math.floor(state.uptimeSeconds/60)} min`));
   $('#account-list').replaceChildren();
@@ -42,7 +43,7 @@ function render(){
     c.append(node('p',`In flight: ${state.pool.byAccount[a.id]||0} / ${a.maxConcurrent}`,'muted'));
     const actions=node('div',undefined,'actions');actions.append(button('Edit',()=>edit('accounts',a)),button(a.enabled?'Disable':'Enable',async()=>{await api('/admin/accounts/'+a.id,'PATCH',{enabled:!a.enabled});await refresh();}));
     actions.append(button('Refresh quota',async()=>{await api('/admin/accounts/'+a.id+'/refresh','POST');await refresh();}));
-    if(a.provider==='anthropic')actions.append(button('Reconnect',async()=>{openLogin(await api('/admin/accounts/'+a.id+'/reconnect','POST'));await refresh();}));
+    if((state.guidedProviders||['anthropic']).includes(a.provider))actions.append(button('Reconnect',async()=>{openLogin(await api('/admin/accounts/'+a.id+'/reconnect','POST'));await refresh();}));
     actions.append(button('History',()=>history(a)),button('Delete',()=>remove('accounts',a),'danger'));c.append(actions);$('#account-list').append(c);
   }
   if(!state.accounts.length)$('#account-list').append(node('div','Add an account to its provider pool. No credentials are imported automatically.','empty'));
@@ -83,19 +84,21 @@ async function history(account) {
 }
 $('#close-history').onclick=()=>$('#history-dialog').close();
 
-let loginSession=null, loginTimer;
+let loginSession=null, loginTimer, loginProvider='anthropic';
 const loginDone=new Set(['complete','failed','cancelled','expired']);
-function openLogin(session=null){
+function openLogin(session=null,provider='anthropic'){
+  loginProvider=session?.provider||provider;
+  $('#login-title').textContent=loginProvider==='gemini'?'Connect Antigravity account':'Connect Anthropic account';
   clearTimeout(loginTimer);loginSession=session;
   $('#login-error').textContent='';$('#login-code').value='';
   $('#login-start').hidden=!!session;$('#login-progress').hidden=!session;
-  if(!session){$('#login-name').value='';$('#login-concurrency').value=2;}
+  if(!session){$('#login-name').value='';$('#login-concurrency').value=loginProvider==='gemini'?20:16;}
   if(!$('#login-dialog').open)$('#login-dialog').showModal();
   if(session){renderLogin(session);scheduleLoginPoll();}
 }
 function renderLogin(s){
   loginSession=s;
-  const labels={starting:'Preparing isolated login…',awaiting_login:'Open the sign-in link and choose the subscription account.',authorizing:'Completing authorization…',verifying:'Checking subscription usage with Anthropic…'};
+  const labels={starting:'Preparing isolated login…',awaiting_login:'Open the sign-in link and choose the subscription account.',authorizing:'Completing authorization…',verifying:'Checking subscription usage with the provider…'};
   $('#login-status').textContent=s.message||labels[s.status]||s.status;
   $('#login-expiry').textContent=loginDone.has(s.status)?'':'Finish before '+time(s.expiresAt)+'. Closing this dialog keeps the login available under Account pools.';
   $('#login-link').hidden=!s.authorizationUrl;
@@ -110,7 +113,8 @@ function scheduleLoginPoll(){
   loginTimer=setTimeout(async()=>{const id=loginSession.id;try{const s=await api('/admin/logins/'+id);if(loginSession?.id!==id||!$('#login-dialog').open)return;renderLogin(s);if(loginDone.has(s.status))await refresh();}catch(e){$('#login-error').textContent=e.message;}finally{scheduleLoginPoll();}},1200);
 }
 $('#connect-account').onclick=()=>openLogin();
-$('#login-start').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;$('#login-error').textContent='';try{const s=await api('/admin/logins','POST',{name:$('#login-name').value,maxConcurrent:Number($('#login-concurrency').value)});openLogin(s);await refresh();}catch(err){$('#login-error').textContent=err.message;}finally{b.disabled=false;}};
+$('#connect-agy').onclick=()=>openLogin(null,'gemini');
+$('#login-start').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;$('#login-error').textContent='';try{const s=await api('/admin/logins','POST',{provider:loginProvider,name:$('#login-name').value,maxConcurrent:Number($('#login-concurrency').value)});openLogin(s);await refresh();}catch(err){$('#login-error').textContent=err.message;}finally{b.disabled=false;}};
 $('#login-code-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;$('#login-error').textContent='';const code=$('#login-code').value;$('#login-code').value='';try{renderLogin(await api('/admin/logins/'+loginSession.id+'/code','POST',{code}));scheduleLoginPoll();}catch(err){$('#login-error').textContent=err.message;}finally{b.disabled=false;}};
 $('#retry-login').onclick=async()=>{const b=$('#retry-login');b.disabled=true;$('#login-error').textContent='';try{renderLogin(await api('/admin/logins/'+loginSession.id+'/verify','POST'));scheduleLoginPoll();}catch(e){$('#login-error').textContent=e.message;}finally{b.disabled=false;}};
 $('#cancel-login').onclick=async()=>{const b=$('#cancel-login');b.disabled=true;try{renderLogin(await api('/admin/logins/'+loginSession.id,'DELETE'));clearTimeout(loginTimer);await refresh();}catch(e){$('#login-error').textContent=e.message;}finally{b.disabled=false;}};

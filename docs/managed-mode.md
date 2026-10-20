@@ -28,7 +28,9 @@ Sessions expire after 10 minutes, with at most four simultaneous logins. Closing
 
 Tokens renew automatically based on the provider's expiry, with a five-minute refresh margin for Anthropic. There is no promised interval between interactive logins. A rejected access token from the usage endpoint triggers one refresh/retry; an unrecoverable refresh (`invalid_grant` or missing refresh token), or a repeated HTTP 401, sets **Login required** and excludes the account from routing. Network failures, HTTP 429 and HTTP 403 are not classified as revoked login; quota freshness and cooldown rules still apply. The console exposes **Reconnect** to recover. Successful cloud checks clear the login-required state. Existing databases receive an additive `authStatus` column automatically.
 
-The guided flow currently covers **Anthropic**. Gemini continues to use **Register credential file**, as do advanced/manual Anthropic setups:
+With `geminiBackend: "antigravity"`, **Connect Antigravity** and **Reconnect** provide the same guided flow for the independent Gemini pool. The official `agy` CLI runs inside an isolated HOME through a PTY (`script` from util-linux). Open the Google link, select the account and paste the authorization code. The proxy stops the CLI once renewable credentials are saved, then verifies cloud quota before registering the account. No agent prompt or generation is sent. Failed or cancelled reconnects preserve the previous account/profile. The legacy Cloud Code backend continues to require manual registration.
+
+**Register credential file** remains available for advanced/manual setups:
 
 Register each subscription account by its own absolute OAuth credentials file path **on the proxy host**. Obtain the file through the provider's normal login flow under a separate CLI configuration/profile. Do not copy one account's file multiple times to simulate multiple subscriptions. Aliases to the same canonical file are rejected, but different copies of the same account cannot be reliably identified from every provider's credential format.
 
@@ -103,7 +105,7 @@ All routes below are on the console listener, not the inference listener. Mutati
 | POST | `/admin/accounts` | Create `{name, provider, credentialsPath, project?, maxConcurrent, enabled}` |
 | PATCH | `/admin/accounts/:id` | Update account or disable for draining |
 | DELETE | `/admin/accounts/:id` | Delete drained account registration |
-| POST | `/admin/logins` | Start guided Anthropic login `{name, maxConcurrent?}` |
+| POST | `/admin/logins` | Start guided login `{name, provider?: "anthropic" or "gemini", maxConcurrent?}` |
 | GET | `/admin/logins/:id` | Read transient login state and provider authorization link |
 | POST | `/admin/logins/:id/code` | Submit `{code}` to the waiting CLI |
 | POST | `/admin/logins/:id/verify` | Retry cloud verification after a temporary failure |
@@ -123,3 +125,5 @@ All routes below are on the console listener, not the inference listener. Mutati
 State is stored in `data/proxy.sqlite` with mode 0600, and the directory is created with mode 0700. Keep it private and back it up while the process is stopped or using SQLite's backup tooling. The database and private configurations are gitignored. One database/process is supported; independent replicas do not share concurrency accounting. Status shows this proxy's own listeners and runtime state, not arbitrary systemd services or host-wide ports.
 
 Run `npm test` for offline regression/integration tests. Test servers use ephemeral loopback ports and synthetic credentials; they do not start or restart the production service.
+
+Concurrency is configurable per deployment, account and API key. The console suggests 16 for new Anthropic logins and 20 for Antigravity; these are operator choices, not advertised provider limits. Changing account labels or concurrency preserves cached cloud quota. Replacing credentials invalidates it.

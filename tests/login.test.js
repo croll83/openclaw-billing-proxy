@@ -133,3 +133,46 @@ test('login HTTP API enforces console origin, supports resuming and protects an 
   assert.equal((await send('/admin/logins/'+reconnect.id,'DELETE')).status,200);
   assert.equal(f.store.accounts()[0].id,a.id);
 });
+
+test('AGY guided login isolates HOME, selects Google, verifies saved tokens and reconnects the pool',async t=>{
+  const f=fixture(t,{login:{geminiBackend:'antigravity'}});
+  let checked;
+  f.monitor.read=async account=>{checked=account;return {buckets:[{modelId:'gemini-test',remainingFraction:1}]};};
+  const s=f.manager.start({name:'Google subscription',provider:'gemini',maxConcurrent:20});
+  const child=f.children[0];
+  assert.equal(child.command,'script');assert.equal(child.options.detached,true);
+  assert.equal(child.options.env.HOME,child.options.cwd);
+  assert.equal(child.options.env.AGY_CLI_DISABLE_AUTO_UPDATE,'true');
+  assert.equal(child.options.env.GOOGLE_API_KEY,undefined);
+  child.stdout.write('Select login method\n');assert.equal(child.input,'\r');
+  child.stdout.write('\x1b[6n');assert.ok(child.input.endsWith('\x1b[1;1R'));
+  child.stdout.write(authorize+'\n');assert.equal(f.manager.get(s.id).authorizationUrl,undefined);
+  const url='https://accounts.google.com/o/oauth2/auth?state=fixture&code_challenge=fixture';
+  child.stdout.write(url+'\n');assert.equal(f.manager.get(s.id).authorizationUrl,url);
+  f.manager.submit(s.id,'fixture-google-code');assert.ok(child.input.endsWith('fixture-google-code\r'));
+  const file=f.manager.get(s.id).credentialsPath;
+  fs.mkdirSync(path.dirname(file),{recursive:true});
+  fs.writeFileSync(file,JSON.stringify({token:{access_token:'fixture-access',refresh_token:'fixture-refresh',expiry:'2099-01-01T00:00:00Z'}}));
+  await until(()=>f.manager.get(s.id).status==='complete');
+  assert.equal(checked.provider,'gemini');assert.deepEqual(child.signals,['SIGTERM']);
+  const account=f.store.accounts()[0];assert.equal(account.provider,'gemini');assert.equal(account.maxConcurrent,20);
+  assert.equal(account.credentialsPath,file);assert.equal(account.quota.buckets[0].remainingFraction,1);
+  const reconnect=f.manager.start({},account.id);await f.manager.stop(f.manager.get(reconnect.id));
+  assert.equal(f.store.accounts()[0].credentialsPath,file);assert.ok(fs.existsSync(file));
+});
+
+test('AGY login rejects legacy backend and invalid provider; cancellation removes staged HOME',async t=>{
+  const legacy=fixture(t);assert.throws(()=>legacy.manager.start({name:'legacy',provider:'gemini'}),/Antigravity backend/);
+  const f=fixture(t,{login:{geminiBackend:'antigravity'}});
+  assert.throws(()=>f.manager.start({name:'invalid',provider:'other'}),/Invalid provider/);
+  const s=f.manager.start({name:'cancel',provider:'gemini'});const directory=f.children[0].options.cwd;
+  await f.manager.stop(f.manager.get(s.id));assert.equal(fs.existsSync(directory),false);assert.equal(f.store.accounts().length,0);
+});
+
+test('changing account concurrency preserves fresh quota; replacing credentials invalidates it',t=>{
+  const f=fixture(t);existing(f);const a=f.store.accounts()[0];
+  const updated=f.store.saveAccount({maxConcurrent:16},a.id);
+  assert.deepEqual(updated.quota,a.quota);assert.equal(updated.quotaUpdatedAt,a.quotaUpdatedAt);
+  const other=path.join(f.dir,'other.json');fs.writeFileSync(other,JSON.stringify({claudeAiOauth:{accessToken:'fixture-other'}}));
+  const replaced=f.store.saveAccount({credentialsPath:other},a.id);assert.equal(replaced.quota,null);assert.equal(replaced.quotaUpdatedAt,null);
+});

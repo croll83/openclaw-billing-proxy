@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-20",
+  "provider": "anthropic",
+  "requestedModel": "haiku-latest",
+  "maxOutputTokensPerRequest": 16,
+  "batches": [
+    {
+      "requested": 1,
+      "observedConcurrent": 1,
+      "successful": 1,
+      "minSeconds": 1.761,
+      "maxSeconds": 1.761
+    },
+    {
+      "requested": 8,
+      "observedConcurrent": 8,
+      "successful": 8,
+      "minSeconds": 1.228,
+      "maxSeconds": 2.039
+    },
+    {
+      "requested": 16,
+      "observedConcurrent": 16,
+      "successful": 16,
+      "minSeconds": 1.312,
+      "maxSeconds": 2.254
+    }
+  ],
+  "inputTokens": 425,
+  "outputTokens": 100,
+  "interpretation": "16 simultaneous short requests succeeded. This is a tested lower bound, not the upstream concurrency limit or a guarantee for long/tool-heavy workloads. No Antigravity generation test was performed."
+}
