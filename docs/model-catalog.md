@@ -14,7 +14,7 @@ Initial recommendations (operator policy dated 2026-10-20):
 
 | Provider | Family | Alias | Concrete model |
 |---|---|---|---|
-| anthropic | fable | fable-latest | claude-fable-5-1 |
+| anthropic | fable | fable-latest | claude-fable-5-2 |
 | anthropic | opus | opus-latest | claude-opus-5-5 |
 | anthropic | sonnet | sonnet-latest | claude-sonnet-5-5 |
 | anthropic | haiku | haiku-latest | claude-haiku-5-5 |
@@ -24,7 +24,7 @@ Initial recommendations (operator policy dated 2026-10-20):
 `latest` is an explicit recommendation, **not** a lexical version sort, cheapest
 model selection, or automatic adoption of new releases. Operators update the
 mapping in the console's Model catalog section. Unknown families return 404; add them only once their concrete model ID is verified.
-Fable ID verified against https://platform.claude.com/docs/en/models/fable-5-1/overview.
+Fable ID verified against https://platform.claude.com/docs/en/models/fable-5-2/overview (2026-11-11). Existing deployments keep the mapping stored in SQLite: change it in the console or via the admin API.
 
 The catalog includes configured recommendations and Gemini model IDs observed in
 recent cloud quota metadata. It is not an exhaustive inventory of every model

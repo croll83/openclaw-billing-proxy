@@ -274,7 +274,7 @@ test('catalog authentication, scope, alias resolution, reporting and recommendat
   response=await fetch(f.api+'/v1/models/latest?provider=anthropic&family=sonnet',{headers});
   assert.equal((await response.json()).id,'claude-sonnet-5-5');
   response=await fetch(f.api+'/v1/models/latest?provider=anthropic&family=fable',{headers});
-  assert.equal((await response.json()).id,'claude-fable-5-1');
+  assert.equal((await response.json()).id,'claude-fable-5-2');
   response=await fetch(f.api+'/v1/messages',{method:'POST',headers,body:JSON.stringify({model:'sonnet-latest',messages:[],stream:true})});
   assert.equal(response.status,200);await response.text();assert.equal(seen[0].model,'claude-sonnet-5-5');
   assert.equal(f.store.modelReport(1)[0].requestedModel,'sonnet-latest');
