@@ -31,6 +31,10 @@ The proxy forwards Anthropic model IDs unchanged; it has no static model catalog
 
 Haiku 5.5 was verified on October 7, 2026 with completed non-streaming and SSE responses through the deployed proxy, without a billing-header change. This replaces Haiku 4.5 in the current tested-model list; dated audit records retain their original model names.
 
+## Fable 5.2 compatibility
+
+Version 2.5.2 updates the fixed Claude Code billing version to `2.1.322`. Anthropic rejects `claude-fable-5-2` from Claude Code older than 2.1.290 (`400 invalid_request_error: Claude Code 2.1.280 does not support this model; version 2.1.290 or newer is required`). The default `fable-latest` recommendation for new databases moves to `claude-fable-5-2`; existing databases keep their stored mapping.
+
 ## Opus 5.5 compatibility
 
 Version 2.2.1 updates the fixed Claude Code billing version to `2.1.280`, the minimum accepted for `claude-opus-5-5`. Updating the installed Claude CLI alone does not update this proxy header. The model ID is forwarded unchanged; no model allowlist change is needed.

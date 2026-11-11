@@ -1,6 +1,6 @@
 // Recommendations are explicit operator policy, never inferred by sorting model IDs.
 const DEFAULTS = [
-  ['anthropic','fable','claude-fable-5-1'],
+  ['anthropic','fable','claude-fable-5-2'],
   ['anthropic','opus','claude-opus-5-5'],
   ['anthropic','sonnet','claude-sonnet-5-5'],
   ['anthropic','haiku','claude-haiku-5-5'],
